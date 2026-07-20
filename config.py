@@ -1,170 +1,171 @@
 """
-Person Detection Configuration
+Vehicle Detection Configuration
 
-Configuration parameters that affect detection behavior.
+Configuration parameters for vehicle detection system.
+
 In real defense systems, these are tuned based on:
-- Environment (desert, forest, urban)
-- Camera specifications (resolution, FPS, night vision capability)
-- Operational requirements (speed vs accuracy tradeoff)
+- Environment (highway, border road, urban, off-road)
+- Camera placement (overhead, angle, distance)
+- Operational requirements (detect all vehicles vs. only large vehicles)
 """
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Optional
 
 
 @dataclass
-class PersonDetectionConfig:
+class VehicleDetectionConfig:
     """
-    Configuration for person detection system.
+    Configuration for vehicle detection system.
     
-    These parameters are critical for balancing:
-    - False Positives (detecting person when there isn't one)
-    - False Negatives (missing actual persons)
-    
-    In defense scenarios:
-    - False Negative = Catastrophic (missed infiltrator)
-    - False Positive = Resource waste (unnecessary alerts)
-    
-    Therefore we tune for lower false negatives at cost of some false positives.
+    Similar to person detection but with vehicle-specific considerations.
     """
     
     # Model Configuration
     model_size: Literal['n', 's', 'm', 'l', 'x'] = 'm'
     """
-    YOLOv8 model size:
-    - 'n' (nano): Fastest, least accurate (~2ms per frame)
-    - 's' (small): Balanced for edge devices
-    - 'm' (medium): Good balance - RECOMMENDED for most deployments
-    - 'l' (large): Higher accuracy, slower
-    - 'x' (xlarge): Maximum accuracy, requires high-end GPU
+    YOLOv8 model size.
     
-    Real scenario: Border posts use 'm', central command uses 'x'
+    Same options as person detection:
+    - 'n' (nano): Fastest
+    - 's' (small): Edge devices
+    - 'm' (medium): RECOMMENDED - good balance
+    - 'l' (large): Higher accuracy
+    - 'x' (xlarge): Maximum accuracy
+    
+    Note: Vehicles are usually larger than persons in frame,
+    so smaller models often perform adequately.
     """
     
     # Detection Thresholds
-    confidence_threshold: float = 0.45
+    confidence_threshold: float = 0.50
     """
-    Minimum confidence to consider a detection valid.
+    Minimum confidence for valid vehicle detection.
     
-    Why 0.45 and not 0.5?
-    - At night or in fog, even valid detections have lower confidence
-    - Better to alert human operator about 45% confidence detection
-      than miss a potential threat
-    - Downstream layers will further validate
+    Why 0.50 (vs. 0.45 for persons)?
+    - Vehicles are larger, easier to detect clearly
+    - Less affected by lighting (larger surface area)
+    - Shape is more distinctive
+    - Lower false positive tolerance (person FN > vehicle FN)
     
-    In practice:
-    - Daytime/clear: 0.5-0.6
-    - Night/fog: 0.4-0.45
-    - Thermal cameras: 0.35-0.4
+    Environment adjustments:
+    - Highway/clear view: 0.55-0.60
+    - Forest road/partial view: 0.45-0.50
+    - Night/adverse weather: 0.40-0.45
     """
     
-    iou_threshold: float = 0.45
+    iou_threshold: float = 0.50
     """
-    Intersection over Union threshold for Non-Maximum Suppression.
+    NMS threshold for overlapping detections.
     
-    What this means:
-    When multiple bounding boxes overlap, we need to decide:
-    "Are these two boxes detecting the same person, or two different people?"
-    
-    Example scenario:
-    Two people standing very close together (like in a group).
-    - Too high (0.7): Might merge them into one detection
-    - Too low (0.3): Might create duplicate boxes for same person
-    - 0.45: Good balance
+    Slightly higher than person detection (0.45) because:
+    - Vehicles less likely to overlap tightly
+    - When they do overlap, usually want to merge
+    - In convoy, vehicles maintain spacing
     """
     
     # Processing Configuration
     input_size: tuple[int, int] = (640, 640)
     """
-    Size to which input frames are resized before detection.
+    Input resolution for detection.
     
-    Trade-off:
-    - Larger (1280x1280): Better for distant objects, slower
-    - Smaller (320x320): Faster, might miss small/distant persons
-    - 640x640: Industry standard, good balance
-    
-    Real scenario:
-    - Long-range border cameras: 1280x1280
-    - Indoor/close-range: 640x640
-    - Drone feeds (power constrained): 416x416
+    Same considerations as person detection:
+    - 640x640: Standard, good performance
+    - 1280x1280: Long-range detection (border cameras)
+    - 416x416: Fast processing, short range
     """
     
-    max_detections: int = 100
+    max_detections: int = 50
     """
-    Maximum number of persons to detect in single frame.
+    Maximum vehicles per frame.
     
-    Why limit?
-    - Prevents system overload during crowd scenarios
-    - In border surveillance, >100 people is extremely rare
-    - If hit, triggers different alert (crowd detection)
+    Why 50 (vs. 100 for persons)?
+    - Vehicles take more space, fewer fit in frame
+    - >50 vehicles = traffic scenario (different module)
+    - Border surveillance rarely sees >10 vehicles
     
-    Exceptions:
-    - Crowd monitoring mode: 500+
-    - Border patrol: 50-100
-    - Restricted zones: 10-20
+    Exception:
+    - Highway monitoring: 100+
+    - Parking lot surveillance: 200+
     """
     
     # Device Configuration
     device: Literal['cpu', 'cuda', 'mps'] = 'cuda'
-    """
-    Processing device:
-    - 'cuda': NVIDIA GPU (recommended for production)
-    - 'cpu': Fallback, much slower (~10x)
-    - 'mps': Apple Silicon (M1/M2)
-    
-    Real deployment:
-    - Field stations: NVIDIA Jetson (embedded CUDA)
-    - Central command: High-end GPU servers
-    - Mobile units: CPU with optimized models
-    """
+    """Processing device."""
     
     half_precision: bool = True
+    """Use FP16 for 2x speedup."""
+    
+    # Vehicle-Specific Parameters
+    min_vehicle_area: int = 2000
     """
-    Use FP16 (half precision) instead of FP32.
+    Minimum bounding box area for valid vehicle detection.
     
-    Benefits:
-    - 2x faster inference
-    - 2x less memory
-    - Minimal accuracy loss (<1%)
-    
-    When to disable:
-    - CPU inference (not supported)
-    - Debugging accuracy issues
-    - Older GPUs without Tensor Cores
-    """
-    
-    # Operational Parameters
-    min_detection_area: int = 400
-    """
-    Minimum bounding box area (in pixels) to consider valid.
-    
-    Why filter small detections?
-    - Very distant persons appear as tiny boxes
-    - Might be false positives (birds, debris)
-    - If operationally relevant, zoom cameras should be used
+    Why 2000 vs. 400 for persons?
+    - Vehicles are inherently larger
+    - Very small detections usually distant/irrelevant
+    - Prevents false positives from small objects
     
     Example:
-    - 20x20 pixel box = 400 pixels² = threshold
-    - Smaller than this is usually noise
+    - 50x40 pixel box = 2000 pixels²
+    - Motorcycle at 100m distance
+    - Smaller than this is too far for actionable intelligence
     
-    Exception:
-    - High-resolution cameras: increase to 900-1600
-    - Thermal cameras: decrease to 200-300
+    Adjust for:
+    - Long-range cameras: 1000-1500
+    - Close-range gates: 3000-5000
     """
     
-    skip_frames: int = 0
+    max_vehicle_area: Optional[int] = None
     """
-    Number of frames to skip between detections.
+    Maximum area threshold.
     
-    Use case:
-    - 0: Process every frame (real-time critical scenarios)
-    - 1: Process every other frame (2x speedup, minimal loss)
-    - 2-4: Longer-term monitoring where second-by-second isn't critical
+    Why limit maximum?
+    - Unusually large detection might be building edge
+    - Camera obstruction (someone standing very close)
+    - Stitching artifact in multi-camera setup
     
-    Defense scenario:
-    - Active threat: 0 (every frame)
-    - Routine monitoring: 1-2
-    - Historical analysis: 5-10
+    Set to None to disable (most scenarios).
+    Set to frame_width * frame_height * 0.8 to prevent full-frame detections.
+    """
+    
+    detect_motorcycles: bool = True
+    """
+    Whether to detect motorcycles.
+    
+    Motorcycles have different tactical profile:
+    - High mobility
+    - Small, hard to track
+    - Can go off-road
+    - Usually 1-2 occupants
+    
+    In some scenarios (heavy border), motorcycles are HIGH priority.
+    In others (vehicle checkpoints), might be filtered out.
+    """
+    
+    detect_large_vehicles: bool = True
+    """
+    Whether to detect trucks and buses.
+    
+    Large vehicles:
+    - High cargo capacity
+    - Usually commercial/authorized
+    - When unauthorized = major threat
+    
+    Usually True, but in some urban scenarios, might filter.
+    """
+    
+    license_plate_detection: bool = True
+    """
+    Whether to attempt license plate region detection.
+    
+    Note: This is REGION detection, not OCR (Optical Character Recognition).
+    OCR will be added in later module (Day 40+).
+    
+    Why detect region?
+    - Presence/absence of plate is evidence
+    - Region extraction for downstream OCR
+    - Covered/missing plates = suspicion indicator
     """
     
     # Edge Case Handling
@@ -172,44 +173,79 @@ class PersonDetectionConfig:
     """
     Apply preprocessing for low-light conditions.
     
-    Techniques:
-    - Histogram equalization
-    - Adaptive brightness adjustment
-    - Noise reduction
-    
-    Trade-off:
-    - Improves night detection
-    - Adds ~2ms processing time
-    - May introduce artifacts
+    Same as person detection but less critical:
+    - Vehicles often have reflectors, lights
+    - Larger surface area catches more light
+    - Headlights in night create strong signal
     """
     
-    occlusion_handling: bool = True
+    skip_frames: int = 0
     """
-    Enhanced detection for partially occluded persons.
+    Frame skipping for performance.
     
-    Real scenario:
-    - Person hiding behind tree
-    - Person crouching behind wall
-    - Person in dense foliage
+    Vehicles move slower than detection rate:
+    - At 30 FPS, vehicle moves ~1-2 meters between frames at highway speed
+    - Can often skip 1-2 frames without missing vehicle
+    - Useful for multi-camera setups
     
-    Method:
-    - Lower confidence threshold for partial detections
-    - Track incomplete bounding boxes
-    - Correlate with temporal data
+    Settings:
+    - 0: Every frame (intersections, gates)
+    - 1: Every other frame (highways)
+    - 2-3: Long-range perimeter monitoring
     """
+    
+    stationary_detection: bool = True
+    """
+    Detect stationary (parked) vehicles.
+    
+    Why separate flag?
+    - Stationary vehicles blend with background
+    - Might want to filter parked cars in some scenarios
+    - Different threat profile (parked = potential IED, surveillance)
+    
+    Implementation:
+    - Temporal analysis (vehicle in same spot across frames)
+    - Done in tracking module (Day 13+)
+    - This flag enables/disables the analysis
+    """
+    
+    # Size Classification Thresholds
+    size_threshold_small_medium: int = 15000
+    """
+    Area threshold between SMALL and MEDIUM vehicles (pixels²).
+    
+    Approximate classifications:
+    - < 15,000: SMALL (motorcycles, compact cars)
+    - 15,000 - 40,000: MEDIUM (sedans, SUVs, pickups)
+    - > 40,000: LARGE (trucks, buses)
+    
+    Note: These are at 640x640 input resolution.
+    Adjust proportionally for different input sizes.
+    """
+    
+    size_threshold_medium_large: int = 40000
+    """Area threshold between MEDIUM and LARGE vehicles."""
     
     def __post_init__(self):
-        """Validate configuration parameters."""
+        """Validate configuration."""
         if not 0.0 <= self.confidence_threshold <= 1.0:
             raise ValueError("confidence_threshold must be between 0 and 1")
         
         if not 0.0 <= self.iou_threshold <= 1.0:
             raise ValueError("iou_threshold must be between 0 and 1")
         
-        if self.min_detection_area < 0:
-            raise ValueError("min_detection_area must be non-negative")
+        if self.min_vehicle_area < 0:
+            raise ValueError("min_vehicle_area must be non-negative")
+        
+        if self.max_vehicle_area is not None and self.max_vehicle_area < self.min_vehicle_area:
+            raise ValueError("max_vehicle_area must be greater than min_vehicle_area")
         
         if self.half_precision and self.device == 'cpu':
-            # FP16 not supported on CPU, auto-disable
             self.half_precision = False
             print("Warning: half_precision disabled for CPU inference")
+        
+        # Size thresholds validation
+        if self.size_threshold_small_medium >= self.size_threshold_medium_large:
+            raise ValueError(
+                "size_threshold_small_medium must be less than size_threshold_medium_large"
+            )

@@ -1,41 +1,161 @@
 """
-Person Detection Demo
+Vehicle Detection Demo
 
-This demonstrates the person detection system in action.
+Demonstrates vehicle detection in action.
 
 Real-world simulation:
 - Processes surveillance camera feed
-- Detects persons
-- Shows confidence levels
-- Displays performance metrics
+- Detects and classifies vehicles
+- Shows tactical information
+- Simulates threat assessment
 
-Run this to understand how Layer 0 works.
+Run this to understand how vehicle detection integrates with the system.
 """
 
 import cv2
 import sys
 from pathlib import Path
 
-from detector import PersonDetector
-from config import PersonDetectionConfig
+from detector import VehicleDetector
+from config import VehicleDetectionConfig
+from classifier import VehicleType
 
 
-def demo_image(image_path: str):
+def demo_combined_detection(image_path: str):
     """
-    Demo: Detect persons in a single image.
+    Demo: Combined person + vehicle detection.
+    
+    Scenario: The real power - detecting BOTH persons and vehicles.
+    This is how the system correlates vehicles with occupants.
+    """
+    print("\n" + "="*60)
+    print("DEMO: Combined Person + Vehicle Detection")
+    print("="*60)
+    print("\nThis demonstrates how vehicle and person detection work together.")
+    print("In real surveillance, this correlation is CRITICAL.")
+    
+    # Import person detector
+    try:
+        sys.path.append(str(Path(__file__).parent.parent / 'person'))
+        from detector import PersonDetector
+    except ImportError:
+        print("\n⚠ Person detector not available. Install Day 1 module first.")
+        return
+    
+    # Initialize both detectors
+    vehicle_config = VehicleDetectionConfig(
+        confidence_threshold=0.50,
+        device='cuda'
+    )
+    vehicle_detector = VehicleDetector(vehicle_config)
+    person_detector = PersonDetector()
+    
+    print(f"\nAnalyzing image: {image_path}")
+    
+    # Detect vehicles
+    vehicles, _ = vehicle_detector.detect(image_path)
+    
+    # Detect persons
+    persons, _ = person_detector.detect(image_path)
+    
+    # Results
+    print(f"\n{'─'*60}")
+    print(f"DETECTION RESULTS:")
+    print(f"{'─'*60}")
+    print(f"Vehicles: {len(vehicles)}")
+    print(f"Persons:  {len(persons)}")
+    
+    # Detailed vehicle info
+    if len(vehicles) > 0:
+        print(f"\nVehicle Details:")
+        for i, vehicle in enumerate(vehicles, 1):
+            print(f"\n  Vehicle #{i}:")
+            print(f"    {vehicle.tactical_summary}")
+            print(f"    Location: {vehicle.center}")
+            print(f"    Size: {vehicle.width}x{vehicle.height} pixels")
+            print(f"    Area: {vehicle.area} pixels²")
+            
+            if vehicle.has_license_plate_region:
+                print(f"    License Plate: Detected ✓")
+            else:
+                print(f"    License Plate: Not visible")
+            
+            # Expected occupants
+            min_occ, max_occ = vehicle.vehicle_type.typical_occupants
+            print(f"    Expected occupants: {min_occ}-{max_occ}")
+    
+    # Tactical correlation
+    print(f"\n{'─'*60}")
+    print(f"TACTICAL CORRELATION:")
+    print(f"{'─'*60}")
+    
+    if len(vehicles) == 0 and len(persons) == 0:
+        print("  ✓ No activity detected")
+    elif len(vehicles) == 0 and len(persons) > 0:
+        print(f"  ⚠ {len(persons)} person(s) WITHOUT vehicle")
+        print(f"    - Pedestrian activity")
+        print(f"    - Possible infiltration on foot")
+        print(f"    - Requires behavior analysis")
+    elif len(vehicles) > 0 and len(persons) == 0:
+        print(f"  ⚠ {len(vehicles)} vehicle(s) WITHOUT visible persons")
+        print(f"    - Possible empty/unmanned vehicle")
+        print(f"    - Persons may be inside (not visible)")
+        print(f"    - Monitor for occupant exit")
+    else:
+        # Both vehicles and persons detected
+        print(f"  {len(vehicles)} vehicle(s) + {len(persons)} person(s)")
+        
+        for vehicle in vehicles:
+            min_occ, max_occ = vehicle.vehicle_type.typical_occupants
+            
+            if len(persons) < min_occ:
+                print(f"\n  ⚠ SUSPICIOUS: {vehicle.vehicle_type.display_name} with only {len(persons)} person(s)")
+                print(f"    Expected: {min_occ}-{max_occ}")
+                print(f"    Possible: Persons inside vehicle, or incomplete detection")
+            elif len(persons) > max_occ:
+                print(f"\n  🚨 ALERT: {vehicle.vehicle_type.display_name} with {len(persons)} person(s)")
+                print(f"    Expected: {min_occ}-{max_occ}")
+                print(f"    Unusual occupant count - investigate")
+            else:
+                print(f"\n  ✓ Normal: {vehicle.vehicle_type.display_name} with {len(persons)} person(s)")
+                print(f"    Within expected range: {min_occ}-{max_occ}")
+    
+    # Combined visualization
+    frame = cv2.imread(image_path)
+    if frame is not None:
+        # Draw vehicles
+        _, viz = vehicle_detector.detect(image_path, visualize=True)
+        
+        # Draw persons on same frame
+        for person in persons:
+            x1, y1, x2, y2 = person.bbox
+            cv2.rectangle(viz, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(
+                viz, f"Person {person.confidence:.0%}", 
+                (x1, y1 - 10),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2
+            )
+        
+        cv2.imshow("Combined Detection - Press any key", viz)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+
+
+def demo_vehicle_image(image_path: str):
+    """
+    Demo: Detect vehicles in a single image.
     
     Scenario: Analyzing a snapshot from surveillance camera.
     """
     print("\n" + "="*60)
-    print("DEMO 1: Single Image Detection")
+    print("DEMO: Single Image Vehicle Detection")
     print("="*60)
     
-    # Initialize detector with default config
-    config = PersonDetectionConfig(
-        confidence_threshold=0.45,
-        device='cuda'  # Change to 'cpu' if no GPU
+    config = VehicleDetectionConfig(
+        confidence_threshold=0.50,
+        device='cuda'
     )
-    detector = PersonDetector(config)
+    detector = VehicleDetector(config)
     
     print(f"\nAnalyzing image: {image_path}")
     
@@ -46,34 +166,35 @@ def demo_image(image_path: str):
     print(f"\n{'─'*60}")
     print(f"DETECTION RESULTS:")
     print(f"{'─'*60}")
-    print(f"Total persons detected: {len(detections)}")
+    print(f"Total vehicles detected: {len(detections)}")
     
     if len(detections) > 0:
         print("\nDetailed breakdown:")
         for i, det in enumerate(detections, 1):
-            confidence_level = (
-                "HIGH" if det.confidence > 0.8 
-                else "MEDIUM" if det.confidence > 0.6 
-                else "LOW"
-            )
-            
-            print(f"\n  Person #{i}:")
-            print(f"    Confidence: {det.confidence:.2%} ({confidence_level})")
+            print(f"\n  Vehicle #{i}:")
+            print(f"    {det.tactical_summary}")
+            print(f"    Type: {det.vehicle_type.display_name}")
+            print(f"    Size: {det.vehicle_size.name}")
+            print(f"    Confidence: {det.confidence:.2%}")
             print(f"    Location: {det.center}")
-            print(f"    Bounding Box: {det.bbox}")
-            print(f"    Size: {det.area} pixels²")
+            print(f"    Dimensions: {det.width}x{det.height} pixels")
+            print(f"    Area: {det.area} pixels²")
             
-            # Simulated threat assessment
-            if det.confidence > 0.7:
-                print(f"    ✓ Valid detection - proceed to behavior analysis")
+            if det.has_license_plate_region:
+                print(f"    License Plate: Region detected ✓")
             else:
-                print(f"    ⚠ Low confidence - requires verification")
+                print(f"    License Plate: Not visible")
+            
+            # Tactical assessment
+            threat = det.characteristics.base_threat_level
+            if threat > 70:
+                print(f"    ⚠ HIGH THREAT: Investigate immediately")
+            elif threat > 40:
+                print(f"    ⚠ MODERATE: Monitor closely")
+            else:
+                print(f"    ✓ LOW THREAT: Routine monitoring")
     else:
-        print("\n  No persons detected in frame.")
-        print("  Possible reasons:")
-        print("    - Empty surveillance zone")
-        print("    - Objects mistaken for persons filtered out")
-        print("    - Persons too distant/small")
+        print("\n  No vehicles detected in frame.")
     
     # Performance
     stats = detector.get_performance_stats()
@@ -83,233 +204,221 @@ def demo_image(image_path: str):
     print(f"  Inference Time: {stats['avg_inference_time_ms']:.1f}ms")
     print(f"  Processing Speed: {stats['avg_fps']:.1f} FPS")
     
-    if stats['avg_fps'] >= 30:
-        print(f"  ✓ Real-time capable (>30 FPS)")
-    else:
-        print(f"  ⚠ Below real-time threshold")
-    
     # Show visualization
     if visualized is not None:
-        cv2.imshow("Person Detection - Press any key to continue", visualized)
+        cv2.imshow("Vehicle Detection - Press any key", visualized)
         cv2.waitKey(0)
         cv2.destroyAllWindows()
 
 
 def demo_webcam():
     """
-    Demo: Real-time person detection from webcam.
+    Demo: Real-time vehicle detection from webcam.
     
     Scenario: Live surveillance feed monitoring.
-    Simulates what happens at an actual surveillance station.
     """
     print("\n" + "="*60)
-    print("DEMO 2: Real-Time Webcam Detection")
+    print("DEMO: Real-Time Vehicle Detection")
     print("="*60)
     print("\nSimulating live surveillance feed...")
     print("Press 'q' to quit, 's' to save screenshot")
     
-    # Initialize detector
-    config = PersonDetectionConfig(
-        confidence_threshold=0.45,
+    config = VehicleDetectionConfig(
+        confidence_threshold=0.50,
         device='cuda',
-        skip_frames=0  # Process every frame
+        skip_frames=0
     )
-    detector = PersonDetector(config)
+    detector = VehicleDetector(config)
     
-    # Open webcam
     cap = cv2.VideoCapture(0)
     
     if not cap.isOpened():
         print("\n❌ Error: Could not access webcam")
-        print("This demo requires a connected camera.")
         return
     
     print("\n✓ Camera connected - starting surveillance...")
     
     frame_count = 0
-    alert_count = 0
+    detection_log = []
     
     while True:
         ret, frame = cap.read()
         if not ret:
-            print("\n❌ Failed to read from camera")
             break
         
         frame_count += 1
         
-        # Detect persons
+        # Detect vehicles
         detections, visualized = detector.detect(frame, visualize=True)
         
-        # Alert logic (simulated)
         if len(detections) > 0:
-            alert_count += 1
+            timestamp = frame_count / 30  # Approximate seconds
+            detection_log.append({
+                'frame': frame_count,
+                'time': timestamp,
+                'vehicles': len(detections),
+                'types': [d.vehicle_type.display_name for d in detections]
+            })
             
-            # In real system, this would:
-            # 1. Log to database
-            # 2. Start tracking
-            # 3. Begin behavior analysis
-            # 4. Check against patrol schedule
-            # 5. Calculate threat score
-            
-            if frame_count % 30 == 0:  # Print every 30 frames
-                print(f"\n[ALERT] Frame {frame_count}: {len(detections)} person(s) detected")
+            if frame_count % 30 == 0:
+                print(f"\n[ALERT] Frame {frame_count}: {len(detections)} vehicle(s)")
                 for det in detections:
-                    print(f"  - Confidence: {det.confidence:.2%} at {det.center}")
+                    print(f"  - {det.tactical_summary}")
         
         # Display
         if visualized is not None:
-            cv2.imshow("SentinelAI - Live Surveillance", visualized)
+            cv2.imshow("SentinelAI - Vehicle Surveillance", visualized)
         
-        # Handle keyboard input
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q'):
             break
         elif key == ord('s'):
-            filename = f"sentinel_capture_{frame_count}.jpg"
+            filename = f"sentinel_vehicle_{frame_count}.jpg"
             cv2.imwrite(filename, visualized)
             print(f"\n📸 Screenshot saved: {filename}")
     
-    # Cleanup
     cap.release()
     cv2.destroyAllWindows()
     
-    # Final statistics
+    # Summary
     stats = detector.get_performance_stats()
     print(f"\n{'='*60}")
     print(f"SESSION SUMMARY:")
     print(f"{'='*60}")
     print(f"Total frames processed: {frame_count}")
-    print(f"Frames with detections: {alert_count}")
-    print(f"Detection rate: {alert_count/frame_count*100:.1f}%")
+    print(f"Frames with vehicles: {len(detection_log)}")
     print(f"Average FPS: {stats['avg_fps']:.1f}")
-    print(f"Average inference time: {stats['avg_inference_time_ms']:.1f}ms")
 
 
-def demo_video(video_path: str):
+def demo_scenario():
     """
-    Demo: Analyze recorded surveillance footage.
+    Demo: Simulate a real border surveillance scenario.
     
-    Scenario: Post-incident analysis or testing on recorded footage.
+    This demonstrates the tactical decision-making process.
     """
     print("\n" + "="*60)
-    print("DEMO 3: Video File Analysis")
+    print("DEMO: Border Surveillance Scenario")
     print("="*60)
     
-    # Initialize detector
-    config = PersonDetectionConfig(
-        confidence_threshold=0.45,
-        device='cuda'
-    )
-    detector = PersonDetector(config)
+    print("""
+SCENARIO:
+---------
+Location: Border Access Road, Sector 5
+Time: 03:14 AM
+Weather: Clear, low visibility (night)
+Expected Activity: None (no scheduled patrol)
+
+Camera #8 triggers motion alert...
+    """)
     
-    # Open video
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        print(f"\n❌ Error: Could not open video file: {video_path}")
+    image_path = input("Enter image/video path to analyze: ").strip()
+    if not image_path or not Path(image_path).exists():
+        print("\n⚠ No valid path provided.")
         return
     
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    fps = cap.get(cv2.CAP_PROP_FPS)
+    print("\n🔍 Analyzing surveillance feed...")
+    print("─" * 60)
     
-    print(f"\nVideo information:")
-    print(f"  Total frames: {total_frames}")
-    print(f"  FPS: {fps}")
-    print(f"  Duration: {total_frames/fps:.1f} seconds")
+    # Initialize detectors
+    vehicle_config = VehicleDetectionConfig(
+        confidence_threshold=0.45,  # Lower for night
+        low_light_boost=True,
+        device='cuda'
+    )
+    vehicle_detector = VehicleDetector(vehicle_config)
     
-    print("\nAnalyzing... (press 'q' to stop)")
+    # Detect
+    detections, viz = vehicle_detector.detect(image_path, visualize=True)
     
-    detection_timeline = []
-    frame_num = 0
+    print(f"\n📊 ANALYSIS RESULTS:")
+    print("─" * 60)
+    print(f"Vehicles Detected: {len(detections)}")
     
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
+    if len(detections) == 0:
+        print("\n✓ No vehicles detected")
+        print("  Assessment: Area clear")
+        print("  Action: Continue routine monitoring")
+    else:
+        total_threat = 0
+        for i, det in enumerate(detections, 1):
+            print(f"\nVehicle #{i}:")
+            print(f"  {det.tactical_summary}")
+            print(f"  Location: {det.center}")
+            total_threat += det.characteristics.base_threat_level
         
-        frame_num += 1
+        avg_threat = total_threat / len(detections)
         
-        # Detect
-        detections, visualized = detector.detect(frame, visualize=True)
+        print(f"\n{'─'*60}")
+        print(f"THREAT ASSESSMENT:")
+        print(f"{'─'*60}")
+        print(f"Average Threat Score: {avg_threat:.0f}/100")
         
-        # Record timeline
-        detection_timeline.append({
-            'frame': frame_num,
-            'timestamp': frame_num / fps,
-            'count': len(detections),
-            'detections': detections
-        })
+        # Decision matrix
+        print(f"\nEVIDENCE SUMMARY:")
+        print(f"  [+20] Unauthorized vehicle(s) at night")
+        print(f"  [+15] No scheduled patrol")
+        print(f"  [+10] Multiple vehicles" if len(detections) > 1 else "  [+05] Single vehicle")
         
-        # Display progress
-        if frame_num % 30 == 0:
-            progress = frame_num / total_frames * 100
-            print(f"  Progress: {progress:.1f}% - Frame {frame_num}/{total_frames}")
+        # Recommendation
+        if avg_threat > 70:
+            print(f"\n🚨 RECOMMENDATION: IMMEDIATE RESPONSE")
+            print(f"  - Alert rapid response team")
+            print(f"  - Activate additional cameras")
+            print(f"  - Initiate vehicle tracking")
+            print(f"  - Request operator review")
+        elif avg_threat > 40:
+            print(f"\n⚠ RECOMMENDATION: ELEVATED MONITORING")
+            print(f"  - Continue tracking")
+            print(f"  - Check authorization database")
+            print(f"  - Alert operator for review")
+        else:
+            print(f"\n✓ RECOMMENDATION: ROUTINE MONITORING")
+            print(f"  - Log incident")
+            print(f"  - Continue observation")
         
-        # Show frame
-        if visualized is not None:
-            cv2.imshow("Video Analysis", visualized)
-        
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
-    
-    cap.release()
-    cv2.destroyAllWindows()
-    
-    # Analyze timeline
-    print(f"\n{'='*60}")
-    print(f"ANALYSIS RESULTS:")
-    print(f"{'='*60}")
-    
-    frames_with_persons = sum(1 for entry in detection_timeline if entry['count'] > 0)
-    max_persons = max(entry['count'] for entry in detection_timeline)
-    
-    print(f"Frames analyzed: {len(detection_timeline)}")
-    print(f"Frames with persons: {frames_with_persons} ({frames_with_persons/len(detection_timeline)*100:.1f}%)")
-    print(f"Maximum persons in single frame: {max_persons}")
-    
-    # Key moments
-    print(f"\nKey moments (person detected):")
-    for entry in detection_timeline[:10]:  # Show first 10
-        if entry['count'] > 0:
-            print(f"  Time {entry['timestamp']:.1f}s: {entry['count']} person(s)")
+        # Show visualization
+        if viz is not None:
+            cv2.imshow("Tactical Assessment", viz)
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
 
 
 def main():
     """Main demo selector."""
     print("\n" + "="*60)
-    print("SentinelAI - Person Detection System Demo")
+    print("SentinelAI - Vehicle Detection System Demo")
     print("="*60)
-    print("\nThis demonstrates Layer 0: Person Detection")
-    print("The foundation of the multi-layer threat assessment system.")
+    print("\nThis demonstrates Layer 0: Vehicle Detection")
+    print("Works alongside Person Detection for complete surveillance.")
     
     print("\nAvailable demos:")
     print("  1. Single image detection")
     print("  2. Real-time webcam detection")
-    print("  3. Video file analysis")
-    print("  4. Batch processing (multiple images)")
+    print("  3. Combined person + vehicle detection")
+    print("  4. Border surveillance scenario")
     
     choice = input("\nSelect demo (1-4) or 'q' to quit: ").strip()
     
     if choice == '1':
-        image_path = input("Enter image path (or press Enter for default): ").strip()
+        image_path = input("Enter image path: ").strip()
         if not image_path:
-            print("\n⚠ No test image specified.")
-            print("Please provide an image path or download test data.")
+            print("\n⚠ No image specified.")
+            print("Try with: https://ultralytics.com/images/bus.jpg")
             return
-        demo_image(image_path)
+        demo_vehicle_image(image_path)
     
     elif choice == '2':
         demo_webcam()
     
     elif choice == '3':
-        video_path = input("Enter video path: ").strip()
-        if not video_path:
-            print("\n⚠ No video file specified.")
+        image_path = input("Enter image path: ").strip()
+        if not image_path:
+            print("\n⚠ No image specified.")
             return
-        demo_video(video_path)
+        demo_combined_detection(image_path)
     
     elif choice == '4':
-        print("\n⚠ Batch processing demo not yet implemented.")
-        print("This will be added in Day 2 improvements.")
+        demo_scenario()
     
     elif choice.lower() == 'q':
         print("\nExiting demo.")

@@ -1,23 +1,29 @@
 """
-Person Detection Module
+Vehicle Detection Module
 
-This is Layer 0 of the SentinelAI system.
-Foundation module that detects human presence in surveillance feeds.
+This is part of Layer 0 of the SentinelAI system.
+Detects and classifies vehicles in surveillance feeds.
 
 Real-world considerations:
-- Must work in varying light conditions (day, night, twilight)
-- Must handle partial occlusion (person behind objects)
-- Must distinguish humans from animals
-- Must provide confidence scores for downstream analysis
-- Must be fast enough for real-time processing (>30 FPS)
+- Vehicles often accompany personnel (patrol vehicles, infiltration vehicles)
+- Vehicle type indicates threat level (civilian vs. military)
+- Vehicle size matters (motorcycle vs. truck has different implications)
+- Unauthorized vehicles are immediate alerts
+- Vehicle-person correlation is key evidence
 
 Why this matters:
-Without reliable person detection, all higher-level analysis
-(behavior, threat scoring, identity) becomes meaningless.
+3 persons walking vs. 3 persons + truck = completely different threat assessment.
+The presence, type, and authorization of a vehicle changes everything.
 """
 
-from .detector import PersonDetector
-from .config import PersonDetectionConfig
+from .detector import VehicleDetector
+from .config import VehicleDetectionConfig
+from .classifier import VehicleType, VehicleSize
 
-__all__ = ['PersonDetector', 'PersonDetectionConfig']
+__all__ = [
+    'VehicleDetector', 
+    'VehicleDetectionConfig',
+    'VehicleType',
+    'VehicleSize'
+]
 __version__ = '0.1.0'
