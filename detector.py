@@ -1,22 +1,27 @@
 """
-Vehicle Detector - Core Detection Engine
+Animal Detector - False Positive Filter
 
-Real-world scenario this handles:
------------------------------------
-Camera shows movement at 3:14 AM on access road.
+Real-world scenario this solves:
+------------------------------------
+02:34 AM - Motion detected in Sector 3
 
-Questions:
-- Is there a vehicle?
-- What type? (Car, truck, motorcycle, bus)
-- What size? (Small, medium, large)
-- How many vehicles?
-- Are they moving or stationary?
+WITHOUT animal detection:
+- Person detector: "Maybe person" (0.52 confidence)
+- System: ALERT OPERATOR
+- Operator wakes up, checks camera
+- It's a deer
+- False alarm #7 tonight
+- Operator frustration increases
 
-This module provides the answers that feed into:
-- Vehicle-person correlation (Day 56)
-- Authorization checks (Day 53-55)
-- Threat scoring (Day 69+)
-- Tracking (Day 13+)
+WITH animal detection:
+- Person detector: "Maybe person" (0.52 confidence - LOW)
+- Animal detector: "Deer" (0.94 confidence - HIGH)
+- System: Wildlife detected - no alert
+- Operator sleeps
+- Trust in system maintained ✓
+
+This module is the difference between a useful surveillance system
+and an alarm system that gets ignored.
 """
 
 import cv2
@@ -33,16 +38,16 @@ except ImportError:
         "ultralytics not installed. Install with: pip install ultralytics"
     )
 
-from .config import VehicleDetectionConfig
-from .classifier import VehicleType, VehicleSize, VehicleCharacteristics
+from .config import AnimalDetectionConfig
+from .classifier import AnimalType, AnimalSize, ThreatLevel, AnimalCharacteristics
 
 
 @dataclass
-class VehicleDetection:
+class AnimalDetection:
     """
-    Single vehicle detection result.
+    Single animal detection result.
     
-    Contains all information needed for downstream analysis.
+    Contains all information needed for filtering and logging.
     """
     
     bbox: Tuple[int, int, int, int]  # (x1, y1, x2, y2)
@@ -51,14 +56,14 @@ class VehicleDetection:
     confidence: float  # 0.0 to 1.0
     """Detection confidence."""
     
-    vehicle_type: VehicleType
-    """Classified vehicle type."""
+    animal_type: AnimalType
+    """Classified animal type."""
     
-    vehicle_size: VehicleSize
-    """Size classification (small/medium/large)."""
+    animal_size: AnimalSize
+    """Size classification."""
     
-    characteristics: VehicleCharacteristics
-    """Complete vehicle characteristics for tactical analysis."""
+    characteristics: AnimalCharacteristics
+    """Complete animal characteristics."""
     
     class_id: int = 0
     """COCO class ID."""
@@ -68,12 +73,6 @@ class VehicleDetection:
     
     center: Tuple[int, int] = (0, 0)
     """Center point of bounding box."""
-    
-    has_license_plate_region: bool = False
-    """Whether a license plate region was detected."""
-    
-    license_plate_bbox: Optional[Tuple[int, int, int, int]] = None
-    """License plate region bounding box (if detected)."""
     
     def __post_init__(self):
         """Calculate derived fields."""
@@ -86,57 +85,57 @@ class VehicleDetection:
     
     @property
     def width(self) -> int:
-        """Vehicle width in pixels."""
+        """Animal width in pixels."""
         return self.bbox[2] - self.bbox[0]
     
     @property
     def height(self) -> int:
-        """Vehicle height in pixels."""
+        """Animal height in pixels."""
         return self.bbox[3] - self.bbox[1]
     
     @property
-    def aspect_ratio(self) -> float:
-        """Width/height ratio."""
-        return self.width / self.height if self.height > 0 else 0.0
+    def should_filter(self) -> bool:
+        """Whether this detection should be filtered out."""
+        return self.characteristics.should_filter
     
     @property
-    def tactical_summary(self) -> str:
-        """
-        One-line tactical summary.
-        
-        Example: "Medium Car (87% conf) - Threat Level: 35/100"
-        """
-        threat = self.characteristics.base_threat_level
+    def summary(self) -> str:
+        """One-line summary."""
+        filter_status = "FILTERED" if self.should_filter else "ALERT"
+        threat = self.characteristics.threat_level.name
         return (
-            f"{self.characteristics.description} "
-            f"({self.confidence:.0%} conf) - "
-            f"Threat Level: {threat}/100"
+            f"[{filter_status}] {self.animal_type.display_name} "
+            f"({self.confidence:.0%}) - Threat: {threat}"
         )
 
 
-class VehicleDetector:
+class AnimalDetector:
     """
-    Core vehicle detection system.
+    Core animal detection system.
+    
+    Primary purpose: Reduce false positive alerts from wildlife.
     
     Usage:
-        detector = VehicleDetector()
+        detector = AnimalDetector()
         detections = detector.detect(frame)
         
-        for vehicle in detections:
-            print(f"Detected: {vehicle.tactical_summary}")
+        filtered = [d for d in detections if d.should_filter]
+        alerts = [d for d in detections if not d.should_filter]
+        
+        print(f"Filtered {len(filtered)} animals, alerting on {len(alerts)}")
     """
     
-    def __init__(self, config: Optional[VehicleDetectionConfig] = None):
+    def __init__(self, config: Optional[AnimalDetectionConfig] = None):
         """
         Initialize detector with configuration.
         
         Args:
             config: Detection configuration. If None, uses defaults.
         """
-        self.config = config or VehicleDetectionConfig()
+        self.config = config or AnimalDetectionConfig()
         
         # Load YOLOv8 model
-        print(f"Loading YOLOv8{self.config.model_size} model for vehicle detection...")
+        print(f"Loading YOLOv8{self.config.model_size} model for animal detection...")
         model_name = f"yolov8{self.config.model_size}.pt"
         
         try:
@@ -155,71 +154,67 @@ class VehicleDetector:
         except Exception as e:
             raise RuntimeError(f"Failed to load YOLO model: {e}")
         
-        # Build class filter based on config
+        # Build class filter
         self.detect_classes = self._build_class_filter()
         
         # Performance tracking
         self.frame_count = 0
         self.total_inference_time = 0.0
-        self.skipped_frames = 0
+        self.total_detections = 0
+        self.total_filtered = 0
+        
+        # Statistics
+        self.animal_counts = {}  # Track detection counts by type
     
     def _build_class_filter(self) -> List[int]:
-        """
-        Build list of COCO class IDs to detect based on config.
-        
-        Returns:
-            List of class IDs to detect
-        """
+        """Build list of COCO class IDs to detect based on config."""
         classes = []
         
-        # Always detect cars (class 2)
-        classes.append(2)
+        # Birds
+        if self.config.detect_birds:
+            classes.append(16)  # bird
         
-        # Motorcycles (class 3)
-        if self.config.detect_motorcycles:
-            classes.append(3)
+        # Small animals
+        if self.config.detect_small_animals:
+            classes.extend([17, 18])  # cat, dog
         
-        # Buses and trucks (classes 5, 7)
-        if self.config.detect_large_vehicles:
-            classes.extend([5, 7])
+        # Livestock
+        if self.config.detect_livestock:
+            classes.extend([19, 20, 21])  # horse, sheep, cow
         
-        return classes
+        # Wildlife (always detect for filtering)
+        classes.extend([22, 23, 24, 25])  # elephant, bear, zebra, giraffe
+        
+        # Remove duplicates
+        return list(set(classes))
     
     def detect(
-        self, 
+        self,
         source: Union[np.ndarray, str, Path],
-        visualize: bool = False
-    ) -> Tuple[List[VehicleDetection], Optional[np.ndarray]]:
+        visualize: bool = False,
+        time_of_day: str = "unknown"
+    ) -> Tuple[List[AnimalDetection], Optional[np.ndarray]]:
         """
-        Detect vehicles in image/frame.
+        Detect animals in image/frame.
         
         Args:
-            source: Input image as numpy array, or path to image/video
+            source: Input image as numpy array, or path to image
             visualize: If True, return annotated image
+            time_of_day: Time context ("day", "night", "twilight")
             
         Returns:
             (detections, annotated_image)
-            - detections: List of VehicleDetection objects
+            - detections: List of AnimalDetection objects
             - annotated_image: Image with bounding boxes (if visualize=True)
-            
-        Example:
-            detections, viz = detector.detect(frame, visualize=True)
-            
-            if len(detections) > 0:
-                for vehicle in detections:
-                    print(f"ALERT: {vehicle.tactical_summary}")
-                    print(f"  Location: {vehicle.center}")
-                    print(f"  Size: {vehicle.width}x{vehicle.height}")
         """
         self.frame_count += 1
         
-        # Frame skipping for performance
+        # Frame skipping
         if self.config.skip_frames > 0:
             if self.frame_count % (self.config.skip_frames + 1) != 0:
-                self.skipped_frames += 1
                 return [], None
         
-        # Preprocess if needed
+        # Preprocess
         if isinstance(source, np.ndarray):
             frame = source.copy()
             if self.config.low_light_boost:
@@ -240,7 +235,7 @@ class VehicleDetector:
             device=self.config.device,
             half=self.config.half_precision,
             max_det=self.config.max_detections,
-            classes=self.detect_classes,  # Only detect configured vehicle types
+            classes=self.detect_classes,
             verbose=False
         )
         
@@ -248,11 +243,15 @@ class VehicleDetector:
         self.total_inference_time += inference_time
         
         # Extract detections
-        detections = self._extract_detections(results[0], frame)
+        detections = self._extract_detections(results[0], frame, time_of_day)
         
-        # Detect license plates (if enabled)
-        if self.config.license_plate_detection:
-            detections = self._detect_license_plates(frame, detections)
+        # Update statistics
+        self.total_detections += len(detections)
+        self.total_filtered += sum(1 for d in detections if d.should_filter)
+        
+        for det in detections:
+            animal_name = det.animal_type.name
+            self.animal_counts[animal_name] = self.animal_counts.get(animal_name, 0) + 1
         
         # Visualization
         annotated = None
@@ -262,22 +261,12 @@ class VehicleDetector:
         return detections, annotated
     
     def _extract_detections(
-        self, 
-        result, 
-        frame: np.ndarray
-    ) -> List[VehicleDetection]:
-        """
-        Extract vehicle detection objects from YOLO results.
-        
-        Filters:
-        - Minimum area threshold
-        - Maximum area threshold (if set)
-        - Vehicle type filter (based on config)
-        
-        Classifies:
-        - Vehicle type (car, truck, motorcycle, bus)
-        - Vehicle size (small, medium, large)
-        """
+        self,
+        result,
+        frame: np.ndarray,
+        time_of_day: str
+    ) -> List[AnimalDetection]:
+        """Extract animal detection objects from YOLO results."""
         detections = []
         
         if result.boxes is None or len(result.boxes) == 0:
@@ -290,56 +279,51 @@ class VehicleDetector:
         for box, conf, cls_id in zip(boxes, confidences, class_ids):
             cls_id = int(cls_id)
             
-            # Skip if not a vehicle class we're detecting
+            # Skip if not an animal class we're detecting
             if cls_id not in self.detect_classes:
                 continue
             
             x1, y1, x2, y2 = map(int, box)
             area = (x2 - x1) * (y2 - y1)
             
-            # Filter by area
-            if area < self.config.min_vehicle_area:
+            # Filter by minimum area
+            if area < self.config.min_animal_area:
                 continue
             
-            if self.config.max_vehicle_area is not None:
-                if area > self.config.max_vehicle_area:
-                    continue
-            
-            # Classify vehicle
+            # Classify animal
             try:
-                vehicle_type = VehicleType.from_class_id(cls_id)
+                animal_type = AnimalType.from_class_id(cls_id)
             except ValueError:
                 continue
             
             # Determine size
-            vehicle_size = self._classify_size(
-                area, 
-                vehicle_type,
-                (x2 - x1, y2 - y1)
-            )
+            animal_size = self._classify_size(area, animal_type)
             
             # Calculate characteristics
             width = x2 - x1
             height = y2 - y1
             aspect_ratio = width / height if height > 0 else 0.0
             
-            # Check if oversized for type
-            is_oversized = self._is_oversized(area, vehicle_type, vehicle_size)
+            # Check if expected in this zone
+            in_expected_zone = False
+            if self.config.expected_animals:
+                in_expected_zone = animal_type in self.config.expected_animals
             
-            characteristics = VehicleCharacteristics(
-                vehicle_type=vehicle_type,
-                size=vehicle_size,
+            characteristics = AnimalCharacteristics(
+                animal_type=animal_type,
+                size=animal_size,
                 confidence=float(conf),
                 bbox_area=area,
                 aspect_ratio=aspect_ratio,
-                is_oversized=is_oversized
+                time_of_day=time_of_day,
+                in_expected_zone=in_expected_zone
             )
             
-            detection = VehicleDetection(
+            detection = AnimalDetection(
                 bbox=(x1, y1, x2, y2),
                 confidence=float(conf),
-                vehicle_type=vehicle_type,
-                vehicle_size=vehicle_size,
+                animal_type=animal_type,
+                animal_size=animal_size,
                 characteristics=characteristics,
                 class_id=cls_id
             )
@@ -349,146 +333,132 @@ class VehicleDetector:
         return detections
     
     def _classify_size(
-        self, 
-        area: int, 
-        vehicle_type: VehicleType,
-        dimensions: Tuple[int, int]
-    ) -> VehicleSize:
+        self,
+        area: int,
+        animal_type: AnimalType
+    ) -> AnimalSize:
+        """Classify animal size based on area and type."""
+        # Type-based classification
+        if animal_type in [AnimalType.BIRD, AnimalType.CAT]:
+            return AnimalSize.SMALL
+        
+        if animal_type in [AnimalType.BEAR, AnimalType.COW, AnimalType.HORSE]:
+            return AnimalSize.LARGE
+        
+        # Area-based for others
+        if area < self.config.size_threshold_small_medium:
+            return AnimalSize.SMALL
+        elif area < self.config.size_threshold_medium_large:
+            return AnimalSize.MEDIUM
+        else:
+            return AnimalSize.LARGE
+    
+    def resolve_conflict_with_person(
+        self,
+        animal_detections: List[AnimalDetection],
+        person_detections: List
+    ) -> Tuple[List, List[AnimalDetection]]:
         """
-        Classify vehicle size based on bounding box area and type.
+        Resolve conflicts when both person and animal detected.
+        
+        This is the CRITICAL function for false positive reduction.
         
         Args:
-            area: Bounding box area in pixels²
-            vehicle_type: Type of vehicle
-            dimensions: (width, height) in pixels
+            animal_detections: List of animal detections
+            person_detections: List of person detections (from person detector)
             
         Returns:
-            VehicleSize classification
+            (filtered_persons, kept_animals)
+            - filtered_persons: Person detections that were NOT animals
+            - kept_animals: Animal detections that caused filtering
             
         Logic:
-        - Motorcycles always SMALL (even if detection box large)
-        - Buses always LARGE
-        - Cars/Trucks classified by area thresholds
+        1. For each person detection:
+           - Check if overlaps with animal detection
+           - Compare confidences
+           - Decide: person or animal?
+        2. If animal wins → filter out person detection
+        3. If person wins → keep person, log animal
         """
-        # Type-based classification
-        if vehicle_type == VehicleType.MOTORCYCLE:
-            return VehicleSize.SMALL
+        if not self.config.enable_conflict_resolution:
+            return person_detections, animal_detections
         
-        if vehicle_type == VehicleType.BUS:
-            return VehicleSize.LARGE
+        filtered_persons = []
+        filtered_animals = []
+        conflicts_resolved = []
         
-        # Area-based classification for cars and trucks
-        if area < self.config.size_threshold_small_medium:
-            return VehicleSize.SMALL
-        elif area < self.config.size_threshold_medium_large:
-            return VehicleSize.MEDIUM
-        else:
-            return VehicleSize.LARGE
-    
-    def _is_oversized(
-        self, 
-        area: int, 
-        vehicle_type: VehicleType,
-        vehicle_size: VehicleSize
-    ) -> bool:
-        """
-        Check if vehicle is unusually large for its type.
-        
-        Oversized vehicles are tactically significant:
-        - Modified vehicle (cargo added)
-        - Detection artifact
-        - Special purpose vehicle
-        
-        Returns True if vehicle is >150% expected size for type.
-        """
-        expected_max = {
-            (VehicleType.CAR, VehicleSize.SMALL): 20000,
-            (VehicleType.CAR, VehicleSize.MEDIUM): 45000,
-            (VehicleType.CAR, VehicleSize.LARGE): 60000,
-            (VehicleType.TRUCK, VehicleSize.MEDIUM): 50000,
-            (VehicleType.TRUCK, VehicleSize.LARGE): 80000,
-            (VehicleType.MOTORCYCLE, VehicleSize.SMALL): 10000,
-            (VehicleType.BUS, VehicleSize.LARGE): 100000,
-        }
-        
-        key = (vehicle_type, vehicle_size)
-        if key in expected_max:
-            return area > expected_max[key] * 1.5
-        
-        return False
-    
-    def _detect_license_plates(
-        self, 
-        frame: np.ndarray, 
-        detections: List[VehicleDetection]
-    ) -> List[VehicleDetection]:
-        """
-        Detect license plate regions within vehicle bounding boxes.
-        
-        Note: This is simplified region detection, not OCR.
-        Full OCR will be added in Day 40+.
-        
-        Strategy:
-        - Search bottom 1/3 of vehicle bbox (plates usually at bottom)
-        - Look for rectangular regions with high edge density
-        - Typical aspect ratio: 2:1 to 5:1 (wider than tall)
-        
-        This is a placeholder implementation.
-        Production would use dedicated license plate detection model.
-        """
-        # For now, simple heuristic-based detection
-        # In production, use specialized model (e.g., YOLOv8 trained on plates)
-        
-        for detection in detections:
-            x1, y1, x2, y2 = detection.bbox
+        for person_det in person_detections:
+            px1, py1, px2, py2 = person_det.bbox
+            person_center = person_det.center
+            person_conf = person_det.confidence
             
-            # Search region: bottom 40% of vehicle
-            search_y1 = y1 + int((y2 - y1) * 0.6)
-            search_region = frame[search_y1:y2, x1:x2]
-            
-            if search_region.size == 0:
-                continue
-            
-            # Simple edge detection
-            gray = cv2.cvtColor(search_region, cv2.COLOR_BGR2GRAY)
-            edges = cv2.Canny(gray, 100, 200)
-            
-            # Look for rectangular contours
-            contours, _ = cv2.findContours(
-                edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-            )
-            
-            for contour in contours:
-                area = cv2.contourArea(contour)
-                if area < 200:  # Too small
-                    continue
+            # Check for overlapping animals
+            overlapping_animals = []
+            for animal_det in animal_detections:
+                ax1, ay1, ax2, ay2 = animal_det.bbox
                 
-                # Get bounding rectangle
-                px, py, pw, ph = cv2.boundingRect(contour)
-                aspect_ratio = pw / ph if ph > 0 else 0
+                # Check overlap using IoU
+                inter_x1 = max(px1, ax1)
+                inter_y1 = max(py1, ay1)
+                inter_x2 = min(px2, ax2)
+                inter_y2 = min(py2, ay2)
                 
-                # Check if aspect ratio matches license plate (2:1 to 5:1)
-                if 2.0 <= aspect_ratio <= 5.0:
-                    # Convert to full frame coordinates
-                    plate_x1 = x1 + px
-                    plate_y1 = search_y1 + py
-                    plate_x2 = plate_x1 + pw
-                    plate_y2 = plate_y1 + ph
+                if inter_x1 < inter_x2 and inter_y1 < inter_y2:
+                    inter_area = (inter_x2 - inter_x1) * (inter_y2 - inter_y1)
+                    person_area = person_det.area
+                    animal_area = animal_det.area
+                    union_area = person_area + animal_area - inter_area
+                    iou = inter_area / union_area if union_area > 0 else 0
                     
-                    detection.has_license_plate_region = True
-                    detection.license_plate_bbox = (
-                        plate_x1, plate_y1, plate_x2, plate_y2
-                    )
-                    break  # Found one, that's enough
+                    if iou > 0.3:  # Significant overlap
+                        overlapping_animals.append((animal_det, iou))
+            
+            # Resolve conflict
+            if overlapping_animals:
+                # Get best matching animal
+                best_animal, best_iou = max(overlapping_animals, key=lambda x: x[1])
+                
+                # Use conflict resolution
+                decision, final_conf = best_animal.characteristics.get_conflict_resolution(
+                    person_conf
+                )
+                
+                if decision == "animal":
+                    # Filter out person, keep animal
+                    filtered_animals.append(best_animal)
+                    conflicts_resolved.append({
+                        'person_conf': person_conf,
+                        'animal_conf': best_animal.confidence,
+                        'animal_type': best_animal.animal_type.display_name,
+                        'decision': 'animal',
+                        'iou': best_iou
+                    })
+                else:
+                    # Keep person, log animal
+                    filtered_persons.append(person_det)
+                    conflicts_resolved.append({
+                        'person_conf': person_conf,
+                        'animal_conf': best_animal.confidence,
+                        'animal_type': best_animal.animal_type.display_name,
+                        'decision': 'person',
+                        'iou': best_iou
+                    })
+            else:
+                # No conflict, keep person
+                filtered_persons.append(person_det)
         
-        return detections
+        # Log conflicts if any resolved
+        if conflicts_resolved and self.config.log_filtered_detections:
+            print(f"\n[CONFLICT RESOLUTION] Resolved {len(conflicts_resolved)} conflicts:")
+            for conflict in conflicts_resolved:
+                print(f"  Person:{conflict['person_conf']:.2f} vs "
+                      f"{conflict['animal_type']}:{conflict['animal_conf']:.2f} "
+                      f"(IoU:{conflict['iou']:.2f}) → {conflict['decision'].upper()}")
+        
+        return filtered_persons, filtered_animals
     
     def _enhance_low_light(self, frame: np.ndarray) -> np.ndarray:
-        """
-        Enhance low-light frames.
-        
-        Same technique as person detection.
-        """
+        """Enhance low-light frames."""
         if len(frame.shape) == 3:
             lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
             l, a, b = cv2.split(lab)
@@ -502,129 +472,107 @@ class VehicleDetector:
             return clahe.apply(frame)
     
     def _visualize_detections(
-        self, 
-        frame: np.ndarray, 
-        detections: List[VehicleDetection],
+        self,
+        frame: np.ndarray,
+        detections: List[AnimalDetection],
         inference_time: float
     ) -> np.ndarray:
-        """
-        Draw bounding boxes and information on frame.
-        
-        Color coding:
-        - Blue: Cars
-        - Red: Trucks
-        - Yellow: Motorcycles
-        - Green: Buses
-        """
+        """Draw bounding boxes and information on frame."""
         vis = frame.copy()
         
-        # Color map for vehicle types
+        # Color map
         color_map = {
-            VehicleType.CAR: (255, 100, 0),        # Blue
-            VehicleType.TRUCK: (0, 0, 255),        # Red
-            VehicleType.MOTORCYCLE: (0, 255, 255), # Yellow
-            VehicleType.BUS: (0, 255, 0)           # Green
+            ThreatLevel.NONE: (0, 255, 0),      # Green (filtered)
+            ThreatLevel.LOW: (0, 255, 255),     # Yellow
+            ThreatLevel.MODERATE: (0, 165, 255),  # Orange
+            ThreatLevel.HIGH: (0, 0, 255)       # Red
         }
+        
+        filtered_count = 0
+        alert_count = 0
         
         for det in detections:
             x1, y1, x2, y2 = det.bbox
-            color = color_map.get(det.vehicle_type, (255, 255, 255))
+            threat = det.characteristics.threat_level
+            color = color_map[threat]
             
-            # Draw vehicle bounding box
-            cv2.rectangle(vis, (x1, y1), (x2, y2), color, 2)
+            # Thicker border for alerts, thinner for filtered
+            thickness = 1 if det.should_filter else 2
             
-            # Draw center point
-            cv2.circle(vis, det.center, 5, color, -1)
+            # Draw bounding box
+            cv2.rectangle(vis, (x1, y1), (x2, y2), color, thickness)
             
-            # Draw license plate region if detected
-            if det.has_license_plate_region and det.license_plate_bbox:
-                px1, py1, px2, py2 = det.license_plate_bbox
-                cv2.rectangle(vis, (px1, py1), (px2, py2), (0, 255, 0), 1)
-                cv2.putText(
-                    vis, "PLATE", (px1, py1 - 5),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1
-                )
+            # Draw center
+            cv2.circle(vis, det.center, 3, color, -1)
             
-            # Draw label
-            label = f"{det.vehicle_type.display_name} {det.confidence:.0%}"
-            size_indicator = det.vehicle_size.name[0]  # S/M/L
-            label += f" [{size_indicator}]"
+            # Label
+            label = f"{det.animal_type.display_name} {det.confidence:.0%}"
+            if det.should_filter:
+                label += " [F]"  # Filtered
+                filtered_count += 1
+            else:
+                label += " [A]"  # Alert
+                alert_count += 1
             
             (label_w, label_h), _ = cv2.getTextSize(
-                label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2
+                label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1
             )
             
             # Label background
             cv2.rectangle(
-                vis, 
-                (x1, y1 - label_h - 10), 
-                (x1 + label_w + 10, y1),
-                color, 
+                vis,
+                (x1, y1 - label_h - 8),
+                (x1 + label_w + 8, y1),
+                color,
                 -1
             )
             
             cv2.putText(
-                vis, label, (x1 + 5, y1 - 5),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2
-            )
-            
-            # Threat level indicator
-            threat = det.characteristics.base_threat_level
-            threat_color = (
-                (0, 255, 0) if threat < 40 else
-                (0, 255, 255) if threat < 70 else
-                (0, 0, 255)
-            )
-            cv2.putText(
-                vis, f"T:{threat}", (x1, y2 + 20),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, threat_color, 2
+                vis, label, (x1 + 4, y1 - 4),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1
             )
         
         # Draw statistics
         fps = 1.0 / inference_time if inference_time > 0 else 0
         stats = [
-            f"Vehicles: {len(detections)}",
-            f"FPS: {fps:.1f}",
-            f"Inference: {inference_time*1000:.1f}ms"
+            f"Animals: {len(detections)}",
+            f"Filtered: {filtered_count}",
+            f"Alerts: {alert_count}",
+            f"FPS: {fps:.1f}"
         ]
-        
-        # Count by type
-        type_counts = {}
-        for det in detections:
-            type_name = det.vehicle_type.display_name
-            type_counts[type_name] = type_counts.get(type_name, 0) + 1
-        
-        if type_counts:
-            stats.append("---")
-            for vtype, count in type_counts.items():
-                stats.append(f"{vtype}: {count}")
         
         y_offset = 30
         for stat in stats:
+            color = (0, 255, 0) if "Filtered" in stat else (0, 255, 255)
             cv2.putText(
                 vis, stat, (10, y_offset),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2
             )
             y_offset += 25
         
         return vis
     
-    def get_performance_stats(self) -> Dict[str, float]:
-        """Get performance statistics."""
-        avg_time = (
-            self.total_inference_time / self.frame_count 
-            if self.frame_count > 0 else 0
-        )
-        
+    def get_statistics(self) -> Dict:
+        """Get detection statistics."""
         return {
-            'avg_fps': 1.0 / avg_time if avg_time > 0 else 0,
-            'avg_inference_time_ms': avg_time * 1000,
             'total_frames': self.frame_count,
-            'skipped_frames': self.skipped_frames
+            'total_detections': self.total_detections,
+            'total_filtered': self.total_filtered,
+            'filter_rate': (
+                self.total_filtered / self.total_detections * 100
+                if self.total_detections > 0 else 0
+            ),
+            'animal_counts': self.animal_counts,
+            'avg_fps': (
+                1.0 / (self.total_inference_time / self.frame_count)
+                if self.frame_count > 0 else 0
+            )
         }
     
     def reset_stats(self):
-        """Reset performance statistics."""
+        """Reset statistics."""
         self.frame_count = 0
         self.total_inference_time = 0.0
-        self.skipped_frames = 0
+        self.total_detections = 0
+        self.total_filtered = 0
+        self.animal_counts = {}

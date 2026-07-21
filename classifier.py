@@ -1,38 +1,56 @@
 """
-Vehicle Classification
+Animal Classification System
 
-Maps COCO/YOLOv8 vehicle classes to tactical categories.
+Maps COCO dataset animals to surveillance categories.
 
-Real defense scenario:
-- Civilian car at border = investigate
-- Military truck at border = check authorization
-- Motorcycle alone = high mobility, single occupant
-- Bus = mass transport, unusual at border
-
-Each vehicle type has different threat implications.
+Critical distinction:
+- Wildlife (deer, bear) = Filter out, no alert
+- Companion animals (dog, cat) = Context dependent
+  - Dog alone = Filter out
+  - Dog with person = Normal
+  - Dog without person in restricted zone = Unusual
 """
 
 from enum import Enum
 from dataclasses import dataclass
+from typing import Tuple
 
 
-class VehicleType(Enum):
+class AnimalType(Enum):
     """
-    Vehicle type classification.
+    Animal type classification from COCO dataset.
     
-    Maps COCO dataset classes to tactical categories.
+    COCO class IDs:
+    - 16: bird
+    - 17: cat
+    - 18: dog
+    - 19: horse
+    - 20: sheep
+    - 21: cow
+    - 22: elephant
+    - 23: bear
+    - 24: zebra
+    - 25: giraffe
     """
     
-    # COCO class_id mapping:
-    CAR = 2          # Cars, sedans, SUVs
-    MOTORCYCLE = 3   # Motorcycles, scooters
-    BUS = 5          # Buses, large passenger vehicles
-    TRUCK = 7        # Trucks, pickups, cargo vehicles
+    # Common wildlife (filter out)
+    BIRD = 16
+    BEAR = 23
+    DEER = 19  # Using horse class for deer (similar shape)
     
-    # Future expansion (requires custom training):
-    # MILITARY_VEHICLE = 100
-    # ARMORED_VEHICLE = 101
-    # EMERGENCY = 102
+    # Domestic animals (context dependent)
+    DOG = 18
+    CAT = 17
+    
+    # Livestock (usually expected in certain zones)
+    COW = 21
+    SHEEP = 20
+    HORSE = 19
+    
+    # Exotic (rare but handled)
+    ELEPHANT = 22
+    ZEBRA = 24
+    GIRAFFE = 25
     
     @property
     def display_name(self) -> str:
@@ -40,201 +58,296 @@ class VehicleType(Enum):
         return self.name.replace('_', ' ').title()
     
     @property
-    def tactical_priority(self) -> int:
+    def is_wildlife(self) -> bool:
         """
-        Priority level for tactical assessment (1-5).
+        Check if this is wild animal (should trigger no alert).
         
-        Higher = More significant in threat assessment.
-        
-        Why these priorities?
-        - Trucks: Large capacity, can carry equipment/personnel
-        - Cars: Standard, most common, medium concern
-        - Motorcycles: High mobility, evasion capability
-        - Buses: Unusual at borders, mass transport
+        Wildlife = animals that naturally occur in environment
+        Non-wildlife = domestic animals that may be authorized
         """
-        priority_map = {
-            VehicleType.TRUCK: 5,      # Highest concern
-            VehicleType.BUS: 4,        # Unusual, investigate
-            VehicleType.CAR: 3,        # Standard concern
-            VehicleType.MOTORCYCLE: 3  # High mobility
-        }
-        return priority_map.get(self, 3)
+        return self in [
+            AnimalType.BIRD,
+            AnimalType.BEAR,
+            AnimalType.DEER
+        ]
     
     @property
-    def typical_occupants(self) -> tuple:
+    def is_domestic(self) -> bool:
         """
-        Typical occupant count (min, max).
+        Check if domestic animal (context matters).
         
-        Used for vehicle-person correlation analysis.
-        If detected persons don't match expected range, raises suspicion.
-        
-        Example:
-        - Car + 7 people = unusual (expect 1-5)
-        - Truck + 1 person = normal
-        - Motorcycle + 3 people = highly unusual
+        Domestic animals:
+        - May be authorized (patrol dogs, livestock)
+        - May accompany persons
+        - Presence alone is not always filtered
         """
-        occupant_map = {
-            VehicleType.CAR: (1, 5),
-            VehicleType.MOTORCYCLE: (1, 2),
-            VehicleType.TRUCK: (1, 3),
-            VehicleType.BUS: (5, 50)
+        return self in [
+            AnimalType.DOG,
+            AnimalType.CAT,
+            AnimalType.COW,
+            AnimalType.SHEEP,
+            AnimalType.HORSE
+        ]
+    
+    @property
+    def typical_behavior(self) -> str:
+        """Expected behavior patterns for this animal."""
+        behaviors = {
+            AnimalType.BIRD: "Flying, perching, rapid movement",
+            AnimalType.BEAR: "Quadrupedal, lumbering, large size",
+            AnimalType.DEER: "Quadrupedal, graceful, alert posture",
+            AnimalType.DOG: "Quadrupedal, variable size, may be with person",
+            AnimalType.CAT: "Quadrupedal, small, stealthy",
+            AnimalType.COW: "Quadrupedal, large, slow, grazing",
+            AnimalType.SHEEP: "Quadrupedal, medium, herding behavior",
+            AnimalType.HORSE: "Quadrupedal, large, powerful"
         }
-        return occupant_map.get(self, (1, 10))
+        return behaviors.get(self, "Unknown behavior pattern")
     
     @classmethod
-    def from_class_id(cls, class_id: int) -> 'VehicleType':
+    def from_class_id(cls, class_id: int) -> 'AnimalType':
         """
-        Convert COCO class ID to VehicleType.
+        Convert COCO class ID to AnimalType.
         
         Args:
             class_id: COCO dataset class ID
             
         Returns:
-            VehicleType enum
+            AnimalType enum
             
         Raises:
-            ValueError: If class_id doesn't map to a vehicle
+            ValueError: If class_id doesn't map to an animal
         """
-        class_id_map = {
-            2: cls.CAR,
-            3: cls.MOTORCYCLE,
-            5: cls.BUS,
-            7: cls.TRUCK
-        }
+        # Direct mapping
+        for animal_type in cls:
+            if animal_type.value == class_id:
+                return animal_type
         
-        if class_id not in class_id_map:
-            raise ValueError(
-                f"Class ID {class_id} is not a recognized vehicle type. "
-                f"Valid IDs: {list(class_id_map.keys())}"
-            )
-        
-        return class_id_map[class_id]
+        raise ValueError(
+            f"Class ID {class_id} is not a recognized animal type."
+        )
     
     @classmethod
     def get_all_class_ids(cls) -> list:
-        """Get all COCO class IDs that represent vehicles."""
-        return [2, 3, 5, 7]
+        """Get all COCO class IDs that represent animals."""
+        return [animal.value for animal in cls]
 
 
-class VehicleSize(Enum):
+class AnimalSize(Enum):
     """
-    Vehicle size classification.
+    Animal size classification.
     
-    Based on bounding box area and vehicle type.
-    
-    Why size matters:
-    - LARGE vehicles (trucks, buses): Can carry cargo, equipment, personnel
-    - MEDIUM vehicles (SUVs, vans): Standard patrol vehicles
-    - SMALL vehicles (motorcycles, compact cars): Limited capacity, high mobility
+    Used for:
+    - Validation (deer should be LARGE, not SMALL)
+    - Person/animal discrimination (human-sized vs. animal-sized)
+    - False positive filtering
     """
     
-    SMALL = 1   # Motorcycles, compact cars
-    MEDIUM = 2  # Sedans, SUVs, pickups
-    LARGE = 3   # Trucks, buses, heavy vehicles
+    SMALL = 1   # Birds, cats, small dogs
+    MEDIUM = 2  # Dogs, sheep, coyotes
+    LARGE = 3   # Deer, bears, cattle, horses
     
     @property
-    def cargo_capacity(self) -> str:
-        """Estimated cargo capacity."""
-        capacity_map = {
-            VehicleSize.SMALL: "Minimal (personal items only)",
-            VehicleSize.MEDIUM: "Moderate (trunk, backseat)",
-            VehicleSize.LARGE: "High (cargo bed, large interior)"
+    def typical_height_range(self) -> Tuple[int, int]:
+        """
+        Typical height range in pixels at 640x640 resolution.
+        
+        Used to validate size classification.
+        Example: If "deer" detected but height < 100px, might be misclassification.
+        """
+        ranges = {
+            AnimalSize.SMALL: (20, 80),
+            AnimalSize.MEDIUM: (60, 150),
+            AnimalSize.LARGE: (120, 300)
         }
-        return capacity_map[self]
+        return ranges[self]
     
     @property
-    def threat_modifier(self) -> float:
+    def confusion_with_person(self) -> str:
         """
-        Threat score modifier based on size.
+        Likelihood of confusion with person detection.
         
-        Larger vehicles = greater cargo capacity = potentially higher threat.
-        
-        Used in threat scoring calculation (Day 69+).
+        LARGE animals are most likely to trigger false person detections
+        because they're similar in size to humans.
         """
-        modifier_map = {
-            VehicleSize.SMALL: 1.0,   # Baseline
-            VehicleSize.MEDIUM: 1.2,  # +20% threat consideration
-            VehicleSize.LARGE: 1.5    # +50% threat consideration
+        confusion = {
+            AnimalSize.SMALL: "Low (too small)",
+            AnimalSize.MEDIUM: "Moderate (similar size to crouching person)",
+            AnimalSize.LARGE: "High (similar size to standing person)"
         }
-        return modifier_map[self]
+        return confusion[self]
+
+
+class ThreatLevel(Enum):
+    """
+    Threat level for animal detection.
+    
+    Different from vehicle/person threat - this is about:
+    1. Should we alert operators?
+    2. Is this animal dangerous?
+    3. Does presence indicate something unusual?
+    """
+    
+    NONE = 0        # Common wildlife, filter out completely
+    LOW = 1         # Domestic animal, log but no alert
+    MODERATE = 2    # Unusual animal, notify operator
+    HIGH = 3        # Dangerous animal or suspicious circumstance
+    
+    @property
+    def should_alert(self) -> bool:
+        """Whether this threat level should trigger operator alert."""
+        return self.value >= 2  # MODERATE or HIGH
+    
+    @property
+    def alert_message(self) -> str:
+        """Alert message template for this threat level."""
+        messages = {
+            ThreatLevel.NONE: "Wildlife detected - no action required",
+            ThreatLevel.LOW: "Domestic animal detected - logged",
+            ThreatLevel.MODERATE: "Unusual animal activity - review recommended",
+            ThreatLevel.HIGH: "Suspicious animal presence - immediate attention"
+        }
+        return messages[self]
 
 
 @dataclass
-class VehicleCharacteristics:
+class AnimalCharacteristics:
     """
-    Complete vehicle characteristics for tactical analysis.
+    Complete animal characteristics for analysis.
     
-    This information feeds into:
-    - Threat scoring (Day 69+)
-    - Vehicle-person correlation (Day 56)
-    - Authorization checks (Day 53-55)
-    - Behavior analysis (Day 23-35)
+    This information determines:
+    - Whether to filter out detection
+    - Whether to alert operator
+    - How to log the event
     """
     
-    vehicle_type: VehicleType
-    size: VehicleSize
+    animal_type: AnimalType
+    size: AnimalSize
     confidence: float
     
     # Physical characteristics
     bbox_area: int
-    aspect_ratio: float  # width/height
+    aspect_ratio: float
     
-    # Tactical flags
-    is_stationary: bool = False
-    is_oversized: bool = False  # Unusually large for type
-    has_visible_cargo: bool = False  # Future: computer vision analysis
+    # Behavioral flags
+    is_moving: bool = True
+    is_alone: bool = True
+    near_person: bool = False  # Within 50 pixels of person detection
+    
+    # Context
+    time_of_day: str = "unknown"  # "day", "night", "twilight"
+    in_expected_zone: bool = True  # e.g., cattle in pasture zone
     
     @property
-    def description(self) -> str:
-        """Human-readable description."""
-        return f"{self.size.name.title()} {self.vehicle_type.display_name}"
+    def threat_level(self) -> ThreatLevel:
+        """
+        Calculate threat level based on characteristics.
+        
+        Logic:
+        1. Wildlife alone = NONE (filter out)
+        2. Domestic animal in expected zone = LOW
+        3. Domestic animal in unexpected zone = MODERATE
+        4. Animal with suspicious circumstances = HIGH
+        """
+        # Wildlife is generally not a threat
+        if self.animal_type.is_wildlife:
+            # Exception: Bear is always at least LOW threat
+            if self.animal_type == AnimalType.BEAR:
+                return ThreatLevel.LOW
+            return ThreatLevel.NONE
+        
+        # Domestic animals - context matters
+        if self.animal_type.is_domestic:
+            # Dog/cat with person = normal, LOW
+            if self.near_person:
+                return ThreatLevel.LOW
+            
+            # Animal in expected zone (e.g., livestock area) = LOW
+            if self.in_expected_zone:
+                return ThreatLevel.LOW
+            
+            # Dog alone in restricted zone at night = MODERATE
+            if self.animal_type == AnimalType.DOG:
+                if self.time_of_day == "night" and not self.in_expected_zone:
+                    return ThreatLevel.MODERATE
+            
+            # Default for domestic = LOW
+            return ThreatLevel.LOW
+        
+        # Unknown/exotic animals = MODERATE (unusual)
+        return ThreatLevel.MODERATE
     
     @property
-    def base_threat_level(self) -> int:
+    def should_filter(self) -> bool:
         """
-        Base threat level (0-100) based on vehicle characteristics alone.
+        Determine if this detection should be filtered out (no alert).
         
-        This is just ONE component of the overall threat score.
-        
-        Factors:
-        - Vehicle type tactical priority
-        - Size modifier
-        - Confidence in detection
-        
-        Real threat score will add:
-        - Time of day
-        - Authorization status
-        - Associated persons
-        - Location
-        - Behavior
-        - etc.
+        Returns True if:
+        - Threat level is NONE
+        - High confidence wildlife detection
+        - Common expected animal
         """
-        base = self.vehicle_type.tactical_priority * 10  # 30-50
-        size_addition = (self.size.value - 1) * 5  # 0-10
-        confidence_factor = self.confidence  # 0.45-1.0
+        if self.threat_level == ThreatLevel.NONE:
+            return True
         
-        threat = (base + size_addition) * confidence_factor
+        # High confidence wildlife with low threat
+        if self.animal_type.is_wildlife and self.confidence > 0.8:
+            if self.threat_level == ThreatLevel.LOW:
+                return True
         
-        # Modifiers
-        if self.is_oversized:
-            threat *= 1.3  # Unusual size = higher suspicion
-        
-        return min(int(threat), 100)
+        return False
     
-    def matches_occupant_count(self, person_count: int) -> bool:
+    @property
+    def filter_reason(self) -> str:
+        """Explanation for why this was filtered."""
+        if not self.should_filter:
+            return "Not filtered - alert required"
+        
+        reasons = []
+        
+        if self.animal_type.is_wildlife:
+            reasons.append(f"{self.animal_type.display_name} is wildlife")
+        
+        if self.threat_level == ThreatLevel.NONE:
+            reasons.append("No threat to security")
+        
+        if self.confidence > 0.8:
+            reasons.append(f"High confidence ({self.confidence:.0%})")
+        
+        return " | ".join(reasons)
+    
+    def get_conflict_resolution(
+        self, 
+        person_confidence: float
+    ) -> Tuple[str, float]:
         """
-        Check if person count matches expected range for this vehicle.
+        Resolve conflict when both person and animal detected.
         
         Args:
-            person_count: Number of persons detected near vehicle
+            person_confidence: Confidence from person detector
             
         Returns:
-            True if count is within expected range, False if suspicious
+            (decision, confidence) where decision is "person" or "animal"
             
-        Example:
-            car = VehicleCharacteristics(VehicleType.CAR, ...)
-            car.matches_occupant_count(3)  # True (1-5 expected)
-            car.matches_occupant_count(10) # False (unusual)
+        Logic:
+        - If animal confidence >> person confidence: Animal
+        - If person confidence >> animal confidence: Person
+        - If similar: Need additional analysis
+        
+        Threshold: 0.2 difference
         """
-        min_occ, max_occ = self.vehicle_type.typical_occupants
-        return min_occ <= person_count <= max_occ
+        diff = self.confidence - person_confidence
+        
+        if diff > 0.2:  # Animal confidence much higher
+            return ("animal", self.confidence)
+        elif diff < -0.2:  # Person confidence much higher
+            return ("person", person_confidence)
+        else:
+            # Similar confidence - use size/type heuristics
+            if self.size == AnimalSize.LARGE:
+                # Large animals more likely to be confused
+                if self.animal_type in [AnimalType.DEER, AnimalType.BEAR]:
+                    return ("animal", self.confidence)
+            
+            # Default to person if ambiguous (better safe than sorry)
+            return ("person", person_confidence)

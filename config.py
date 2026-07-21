@@ -1,24 +1,23 @@
 """
-Vehicle Detection Configuration
+Animal Detection Configuration
 
-Configuration parameters for vehicle detection system.
+Configuration for the false-positive filtering system.
 
-In real defense systems, these are tuned based on:
-- Environment (highway, border road, urban, off-road)
-- Camera placement (overhead, angle, distance)
-- Operational requirements (detect all vehicles vs. only large vehicles)
+Key consideration:
+We want to catch ALL animals (low threshold) to prevent false person alerts,
+but we don't want to miss actual persons (careful conflict resolution).
 """
 
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import Literal, List, Optional
 
 
 @dataclass
-class VehicleDetectionConfig:
+class AnimalDetectionConfig:
     """
-    Configuration for vehicle detection system.
+    Configuration for animal detection system.
     
-    Similar to person detection but with vehicle-specific considerations.
+    Tuned for false-positive reduction while maintaining person detection accuracy.
     """
     
     # Model Configuration
@@ -26,67 +25,48 @@ class VehicleDetectionConfig:
     """
     YOLOv8 model size.
     
-    Same options as person detection:
-    - 'n' (nano): Fastest
-    - 's' (small): Edge devices
-    - 'm' (medium): RECOMMENDED - good balance
-    - 'l' (large): Higher accuracy
-    - 'x' (xlarge): Maximum accuracy
-    
-    Note: Vehicles are usually larger than persons in frame,
-    so smaller models often perform adequately.
+    Recommendation: Same as person detection ('m') for consistency.
     """
     
     # Detection Thresholds
-    confidence_threshold: float = 0.50
+    confidence_threshold: float = 0.40
     """
-    Minimum confidence for valid vehicle detection.
+    Minimum confidence for animal detection.
     
-    Why 0.50 (vs. 0.45 for persons)?
-    - Vehicles are larger, easier to detect clearly
-    - Less affected by lighting (larger surface area)
-    - Shape is more distinctive
-    - Lower false positive tolerance (person FN > vehicle FN)
+    Why 0.40 (lower than person's 0.45)?
+    - Want to catch all potential animals
+    - Better to have false animal detection than false person detection
+    - Low-confidence animals still useful for filtering
     
-    Environment adjustments:
-    - Highway/clear view: 0.55-0.60
-    - Forest road/partial view: 0.45-0.50
-    - Night/adverse weather: 0.40-0.45
+    Philosophy:
+    - Low confidence person (0.48) + High confidence animal (0.85) = Filter as animal
+    - We're trading precision for recall on animals
+    
+    Settings by environment:
+    - Urban (few animals): 0.45-0.50
+    - Rural/forest (many animals): 0.35-0.40
+    - Wildlife preserve: 0.30-0.35
     """
     
-    iou_threshold: float = 0.50
-    """
-    NMS threshold for overlapping detections.
-    
-    Slightly higher than person detection (0.45) because:
-    - Vehicles less likely to overlap tightly
-    - When they do overlap, usually want to merge
-    - In convoy, vehicles maintain spacing
-    """
+    iou_threshold: float = 0.45
+    """NMS threshold for overlapping detections."""
     
     # Processing Configuration
     input_size: tuple[int, int] = (640, 640)
-    """
-    Input resolution for detection.
-    
-    Same considerations as person detection:
-    - 640x640: Standard, good performance
-    - 1280x1280: Long-range detection (border cameras)
-    - 416x416: Fast processing, short range
-    """
+    """Input resolution - same as person/vehicle for consistency."""
     
     max_detections: int = 50
     """
-    Maximum vehicles per frame.
+    Maximum animals per frame.
     
-    Why 50 (vs. 100 for persons)?
-    - Vehicles take more space, fewer fit in frame
-    - >50 vehicles = traffic scenario (different module)
-    - Border surveillance rarely sees >10 vehicles
+    Why 50?
+    - Herd animals (deer, sheep) can appear in groups
+    - Bird flocks can trigger many detections
+    - Still reasonable for processing
     
     Exception:
-    - Highway monitoring: 100+
-    - Parking lot surveillance: 200+
+    - Bird feeding area: 100+
+    - Livestock area: 200+
     """
     
     # Device Configuration
@@ -94,78 +74,170 @@ class VehicleDetectionConfig:
     """Processing device."""
     
     half_precision: bool = True
-    """Use FP16 for 2x speedup."""
+    """Use FP16 for speedup."""
     
-    # Vehicle-Specific Parameters
-    min_vehicle_area: int = 2000
+    # Animal-Specific Parameters
+    min_animal_area: int = 200
     """
-    Minimum bounding box area for valid vehicle detection.
+    Minimum bounding box area for valid animal detection.
     
-    Why 2000 vs. 400 for persons?
-    - Vehicles are inherently larger
-    - Very small detections usually distant/irrelevant
-    - Prevents false positives from small objects
+    Why 200 (vs. 400 for person, 2000 for vehicle)?
+    - Animals can be small (cats, birds)
+    - Even small animals can trigger false alerts
+    - Want to catch them all
+    
+    Examples at 640x640:
+    - 15x15 = 225 px² (small bird)
+    - 20x30 = 600 px² (cat)
+    - 40x80 = 3200 px² (deer)
+    """
+    
+    detect_birds: bool = True
+    """
+    Whether to detect birds.
+    
+    Birds are common false positive triggers:
+    - Large birds (crows, eagles) can look like movement
+    - Flocks create motion alerts
+    - Usually want to filter them out
+    
+    Disable only if:
+    - Birds are not present in area
+    - Camera angle doesn't capture ground level
+    """
+    
+    detect_small_animals: bool = True
+    """
+    Whether to detect cats and small animals.
+    
+    Small animals less likely to trigger person detection,
+    but can still cause motion alerts.
+    """
+    
+    detect_livestock: bool = True
+    """
+    Whether to detect cows, sheep, horses.
+    
+    In agricultural/rural settings, livestock is expected.
+    Detection allows for:
+    - Logging livestock movement
+    - Verifying they're in correct zones
+    - Detecting unusual livestock behavior
+    """
+    
+    # Conflict Resolution
+    enable_conflict_resolution: bool = True
+    """
+    Whether to resolve person/animal conflicts.
+    
+    When both person and animal detected at similar location:
+    - Compare confidence scores
+    - Use size/shape heuristics
+    - Make determination: person or animal
+    
+    Critical feature for reducing false positives.
+    """
+    
+    conflict_confidence_threshold: float = 0.20
+    """
+    Confidence difference threshold for conflict resolution.
+    
+    If animal confidence - person confidence > 0.20:
+        → Classify as animal
+    If person confidence - animal confidence > 0.20:
+        → Classify as person
+    Else:
+        → Use heuristics or default to person (safe choice)
     
     Example:
-    - 50x40 pixel box = 2000 pixels²
-    - Motorcycle at 100m distance
-    - Smaller than this is too far for actionable intelligence
-    
-    Adjust for:
-    - Long-range cameras: 1000-1500
-    - Close-range gates: 3000-5000
+    - Person: 0.52, Animal: 0.88 → Difference: 0.36 → Animal ✓
+    - Person: 0.65, Animal: 0.50 → Difference: -0.15 → Person ✓
+    - Person: 0.60, Animal: 0.55 → Difference: -0.05 → Heuristics needed
     """
     
-    max_vehicle_area: Optional[int] = None
+    proximity_threshold: int = 50
     """
-    Maximum area threshold.
+    Distance threshold (pixels) to consider person/animal "near" each other.
     
-    Why limit maximum?
-    - Unusually large detection might be building edge
-    - Camera obstruction (someone standing very close)
-    - Stitching artifact in multi-camera setup
+    Used for:
+    - Dog with person detection (normal)
+    - Determining if animal is "alone"
+    - Context for threat assessment
     
-    Set to None to disable (most scenarios).
-    Set to frame_width * frame_height * 0.8 to prevent full-frame detections.
-    """
-    
-    detect_motorcycles: bool = True
-    """
-    Whether to detect motorcycles.
-    
-    Motorcycles have different tactical profile:
-    - High mobility
-    - Small, hard to track
-    - Can go off-road
-    - Usually 1-2 occupants
-    
-    In some scenarios (heavy border), motorcycles are HIGH priority.
-    In others (vehicle checkpoints), might be filtered out.
+    50 pixels at 640x640 ≈ 8% of frame width (reasonable proximity)
     """
     
-    detect_large_vehicles: bool = True
+    # Size Classification Thresholds
+    size_threshold_small_medium: int = 3000
     """
-    Whether to detect trucks and buses.
+    Area threshold between SMALL and MEDIUM animals.
     
-    Large vehicles:
-    - High cargo capacity
-    - Usually commercial/authorized
-    - When unauthorized = major threat
+    At 640x640 resolution:
+    - < 3,000 px²: SMALL (birds, cats, small dogs)
+    - 3,000-15,000 px²: MEDIUM (dogs, sheep, coyotes)
+    - > 15,000 px²: LARGE (deer, bears, cattle, horses)
     
-    Usually True, but in some urban scenarios, might filter.
+    Compare to person: ~8,000-25,000 px²
     """
     
-    license_plate_detection: bool = True
+    size_threshold_medium_large: int = 15000
+    """Area threshold between MEDIUM and LARGE animals."""
+    
+    # Behavioral Analysis
+    enable_movement_analysis: bool = True
     """
-    Whether to attempt license plate region detection.
+    Whether to analyze movement patterns.
     
-    Note: This is REGION detection, not OCR (Optical Character Recognition).
-    OCR will be added in later module (Day 40+).
+    Movement helps distinguish:
+    - Quadrupedal (four-legged) vs. bipedal (two-legged)
+    - Flight pattern (birds) vs. walking
+    - Grazing (stationary with head down) vs. alert posture
     
-    Why detect region?
-    - Presence/absence of plate is evidence
-    - Region extraction for downstream OCR
-    - Covered/missing plates = suspicion indicator
+    Requires temporal data (multiple frames) - done in tracking module.
+    This flag enables preparation for that analysis.
+    """
+    
+    # Filtering Options
+    auto_filter_wildlife: bool = True
+    """
+    Automatically filter out high-confidence wildlife detections.
+    
+    If True:
+    - Deer with 0.90 confidence → Filtered, no alert
+    - Bear with 0.85 confidence → Logged, possibly alerted (dangerous animal)
+    - Bird with 0.95 confidence → Filtered completely
+    
+    If False:
+    - All detections logged and sent to operator
+    - Useful for wildlife monitoring scenarios
+    """
+    
+    wildlife_confidence_threshold: float = 0.70
+    """
+    Minimum confidence to auto-filter wildlife.
+    
+    Only filter if:
+    - Is wildlife (deer, bird, etc.)
+    - Confidence > this threshold
+    - Threat level is NONE or LOW
+    
+    Why 0.70?
+    - Must be confident it's actually an animal
+    - Don't want to filter potential persons
+    - Lower confidence wildlife still logged, not filtered
+    """
+    
+    log_filtered_detections: bool = True
+    """
+    Whether to log detections that were filtered out.
+    
+    Logging provides:
+    - Wildlife activity patterns
+    - System performance metrics
+    - Audit trail
+    - False positive statistics
+    
+    Recommended: True (storage is cheap, data is valuable)
     """
     
     # Edge Case Handling
@@ -173,58 +245,35 @@ class VehicleDetectionConfig:
     """
     Apply preprocessing for low-light conditions.
     
-    Same as person detection but less critical:
-    - Vehicles often have reflectors, lights
-    - Larger surface area catches more light
-    - Headlights in night create strong signal
+    Animals are often most active at dawn/dusk/night.
+    Enhancement helps detect them for filtering.
     """
     
     skip_frames: int = 0
     """
     Frame skipping for performance.
     
-    Vehicles move slower than detection rate:
-    - At 30 FPS, vehicle moves ~1-2 meters between frames at highway speed
-    - Can often skip 1-2 frames without missing vehicle
-    - Useful for multi-camera setups
+    Animals move slower than detection rate, can often skip frames.
     
     Settings:
-    - 0: Every frame (intersections, gates)
-    - 1: Every other frame (highways)
-    - 2-3: Long-range perimeter monitoring
+    - 0: Every frame (real-time critical)
+    - 1-2: Performance optimization
+    - 3-5: Batch processing
     """
     
-    stationary_detection: bool = True
+    # Expected Animals by Zone
+    expected_animals: Optional[List[str]] = None
     """
-    Detect stationary (parked) vehicles.
+    List of animal types expected in this zone.
     
-    Why separate flag?
-    - Stationary vehicles blend with background
-    - Might want to filter parked cars in some scenarios
-    - Different threat profile (parked = potential IED, surveillance)
+    Example:
+    - Livestock area: ['cow', 'sheep', 'horse']
+    - Forest edge: ['deer', 'bear', 'bird']
+    - Urban perimeter: ['dog', 'cat']
     
-    Implementation:
-    - Temporal analysis (vehicle in same spot across frames)
-    - Done in tracking module (Day 13+)
-    - This flag enables/disables the analysis
+    If None, all animals considered unexpected (default).
+    Expected animals get lower threat scores.
     """
-    
-    # Size Classification Thresholds
-    size_threshold_small_medium: int = 15000
-    """
-    Area threshold between SMALL and MEDIUM vehicles (pixels²).
-    
-    Approximate classifications:
-    - < 15,000: SMALL (motorcycles, compact cars)
-    - 15,000 - 40,000: MEDIUM (sedans, SUVs, pickups)
-    - > 40,000: LARGE (trucks, buses)
-    
-    Note: These are at 640x640 input resolution.
-    Adjust proportionally for different input sizes.
-    """
-    
-    size_threshold_medium_large: int = 40000
-    """Area threshold between MEDIUM and LARGE vehicles."""
     
     def __post_init__(self):
         """Validate configuration."""
@@ -234,11 +283,14 @@ class VehicleDetectionConfig:
         if not 0.0 <= self.iou_threshold <= 1.0:
             raise ValueError("iou_threshold must be between 0 and 1")
         
-        if self.min_vehicle_area < 0:
-            raise ValueError("min_vehicle_area must be non-negative")
+        if self.min_animal_area < 0:
+            raise ValueError("min_animal_area must be non-negative")
         
-        if self.max_vehicle_area is not None and self.max_vehicle_area < self.min_vehicle_area:
-            raise ValueError("max_vehicle_area must be greater than min_vehicle_area")
+        if not 0.0 <= self.conflict_confidence_threshold <= 1.0:
+            raise ValueError("conflict_confidence_threshold must be between 0 and 1")
+        
+        if not 0.0 <= self.wildlife_confidence_threshold <= 1.0:
+            raise ValueError("wildlife_confidence_threshold must be between 0 and 1")
         
         if self.half_precision and self.device == 'cpu':
             self.half_precision = False
@@ -249,3 +301,15 @@ class VehicleDetectionConfig:
             raise ValueError(
                 "size_threshold_small_medium must be less than size_threshold_medium_large"
             )
+        
+        # Parse expected animals to enum values if provided
+        if self.expected_animals:
+            from .classifier import AnimalType
+            parsed = []
+            for animal_str in self.expected_animals:
+                try:
+                    animal_type = AnimalType[animal_str.upper()]
+                    parsed.append(animal_type)
+                except KeyError:
+                    print(f"Warning: Unknown animal type '{animal_str}' in expected_animals")
+            self.expected_animals = parsed
