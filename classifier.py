@@ -1,56 +1,67 @@
 """
-Animal Classification System
+Object Classification System
 
-Maps COCO dataset animals to surveillance categories.
+Maps COCO objects to security-relevant categories.
 
-Critical distinction:
-- Wildlife (deer, bear) = Filter out, no alert
-- Companion animals (dog, cat) = Context dependent
-  - Dog alone = Filter out
-  - Dog with person = Normal
-  - Dog without person in restricted zone = Unusual
+Critical distinctions:
+- Personal items (backpack, handbag) = Context dependent
+- Large containers (suitcase) = Higher scrutiny
+- Abandoned objects = Critical threat
+- Weapon-like objects = Immediate response
 """
 
 from enum import Enum
 from dataclasses import dataclass
-from typing import Tuple
+from typing import Tuple, Optional
 
 
-class AnimalType(Enum):
+class ObjectType(Enum):
     """
-    Animal type classification from COCO dataset.
+    Object type classification from COCO dataset.
     
-    COCO class IDs:
-    - 16: bird
-    - 17: cat
-    - 18: dog
-    - 19: horse
-    - 20: sheep
-    - 21: cow
-    - 22: elephant
-    - 23: bear
-    - 24: zebra
-    - 25: giraffe
+    COCO class IDs (relevant objects):
+    - 24: backpack
+    - 25: umbrella
+    - 26: handbag
+    - 27: tie
+    - 28: suitcase
+    - 31: skis
+    - 32: snowboard
+    - 33: sports ball
+    - 34: kite
+    - 35: baseball bat
+    - 36: baseball glove
+    - 37: skateboard
+    - 38: surfboard
+    - 39: tennis racket
+    - 41: cup
+    - 42: fork
+    - 43: knife (eating utensil, not weapon)
+    - 44: spoon
+    - 73: book
+    - 84: book (duplicate)
     """
     
-    # Common wildlife (filter out)
-    BIRD = 16
-    BEAR = 23
-    DEER = 19  # Using horse class for deer (similar shape)
+    # Personal carry items
+    BACKPACK = 24
+    HANDBAG = 26
+    SUITCASE = 28
+    UMBRELLA = 25
     
-    # Domestic animals (context dependent)
-    DOG = 18
-    CAT = 17
+    # Sports equipment
+    SPORTS_BALL = 33
+    BASEBALL_BAT = 35
+    SKATEBOARD = 37
+    TENNIS_RACKET = 39
+    SKIS = 31
+    SNOWBOARD = 32
     
-    # Livestock (usually expected in certain zones)
-    COW = 21
-    SHEEP = 20
-    HORSE = 19
+    # Smaller items
+    BOTTLE = 41  # Using cup class
+    BOOK = 73
     
-    # Exotic (rare but handled)
-    ELEPHANT = 22
-    ZEBRA = 24
-    GIRAFFE = 25
+    # Note: Actual weapons require specialized detection
+    # These are included for general object tracking
     
     @property
     def display_name(self) -> str:
@@ -58,296 +69,313 @@ class AnimalType(Enum):
         return self.name.replace('_', ' ').title()
     
     @property
-    def is_wildlife(self) -> bool:
-        """
-        Check if this is wild animal (should trigger no alert).
-        
-        Wildlife = animals that naturally occur in environment
-        Non-wildlife = domestic animals that may be authorized
-        """
+    def is_personal_item(self) -> bool:
+        """Check if this is a personal carry item."""
         return self in [
-            AnimalType.BIRD,
-            AnimalType.BEAR,
-            AnimalType.DEER
+            ObjectType.BACKPACK,
+            ObjectType.HANDBAG,
+            ObjectType.UMBRELLA,
+            ObjectType.BOTTLE
         ]
     
     @property
-    def is_domestic(self) -> bool:
-        """
-        Check if domestic animal (context matters).
-        
-        Domestic animals:
-        - May be authorized (patrol dogs, livestock)
-        - May accompany persons
-        - Presence alone is not always filtered
-        """
+    def is_large_container(self) -> bool:
+        """Check if this is a large container (requires inspection)."""
         return self in [
-            AnimalType.DOG,
-            AnimalType.CAT,
-            AnimalType.COW,
-            AnimalType.SHEEP,
-            AnimalType.HORSE
+            ObjectType.BACKPACK,
+            ObjectType.SUITCASE
         ]
     
     @property
-    def typical_behavior(self) -> str:
-        """Expected behavior patterns for this animal."""
-        behaviors = {
-            AnimalType.BIRD: "Flying, perching, rapid movement",
-            AnimalType.BEAR: "Quadrupedal, lumbering, large size",
-            AnimalType.DEER: "Quadrupedal, graceful, alert posture",
-            AnimalType.DOG: "Quadrupedal, variable size, may be with person",
-            AnimalType.CAT: "Quadrupedal, small, stealthy",
-            AnimalType.COW: "Quadrupedal, large, slow, grazing",
-            AnimalType.SHEEP: "Quadrupedal, medium, herding behavior",
-            AnimalType.HORSE: "Quadrupedal, large, powerful"
+    def is_sports_equipment(self) -> bool:
+        """Check if this is sports equipment."""
+        return self in [
+            ObjectType.SPORTS_BALL,
+            ObjectType.BASEBALL_BAT,
+            ObjectType.SKATEBOARD,
+            ObjectType.TENNIS_RACKET,
+            ObjectType.SKIS,
+            ObjectType.SNOWBOARD
+        ]
+    
+    @property
+    def can_be_weapon(self) -> bool:
+        """
+        Check if object could potentially be used as weapon.
+        
+        Note: This is NOT weapon detection (that's Day 59-62).
+        This is awareness that certain objects require attention.
+        """
+        return self in [
+            ObjectType.BASEBALL_BAT,  # Blunt object
+            ObjectType.SKATEBOARD,    # Blunt object
+        ]
+    
+    @property
+    def typical_context(self) -> str:
+        """Expected context for this object."""
+        contexts = {
+            ObjectType.BACKPACK: "School, hiking, travel",
+            ObjectType.HANDBAG: "Shopping, business, daily carry",
+            ObjectType.SUITCASE: "Travel, business trips",
+            ObjectType.UMBRELLA: "Rain protection",
+            ObjectType.SPORTS_BALL: "Sports venues, parks",
+            ObjectType.BASEBALL_BAT: "Sports venues, recreational areas",
+            ObjectType.SKATEBOARD: "Parks, recreational areas",
+            ObjectType.TENNIS_RACKET: "Sports venues, clubs"
         }
-        return behaviors.get(self, "Unknown behavior pattern")
+        return contexts.get(self, "General use")
     
     @classmethod
-    def from_class_id(cls, class_id: int) -> 'AnimalType':
-        """
-        Convert COCO class ID to AnimalType.
-        
-        Args:
-            class_id: COCO dataset class ID
-            
-        Returns:
-            AnimalType enum
-            
-        Raises:
-            ValueError: If class_id doesn't map to an animal
-        """
-        # Direct mapping
-        for animal_type in cls:
-            if animal_type.value == class_id:
-                return animal_type
+    def from_class_id(cls, class_id: int) -> 'ObjectType':
+        """Convert COCO class ID to ObjectType."""
+        for obj_type in cls:
+            if obj_type.value == class_id:
+                return obj_type
         
         raise ValueError(
-            f"Class ID {class_id} is not a recognized animal type."
+            f"Class ID {class_id} is not a recognized object type."
         )
     
     @classmethod
     def get_all_class_ids(cls) -> list:
-        """Get all COCO class IDs that represent animals."""
-        return [animal.value for animal in cls]
+        """Get all COCO class IDs that represent objects we track."""
+        return [obj.value for obj in cls]
 
 
-class AnimalSize(Enum):
+class ObjectSize(Enum):
     """
-    Animal size classification.
+    Object size classification.
     
-    Used for:
-    - Validation (deer should be LARGE, not SMALL)
-    - Person/animal discrimination (human-sized vs. animal-sized)
-    - False positive filtering
+    Size affects:
+    - Inspection requirements (large = more scrutiny)
+    - Concealment capacity (large backpack vs. small purse)
+    - Threat potential (large container = higher capacity)
     """
     
-    SMALL = 1   # Birds, cats, small dogs
-    MEDIUM = 2  # Dogs, sheep, coyotes
-    LARGE = 3   # Deer, bears, cattle, horses
+    SMALL = 1   # Bottles, books, small bags
+    MEDIUM = 2  # Handbags, small backpacks
+    LARGE = 3   # Large backpacks, suitcases
     
     @property
-    def typical_height_range(self) -> Tuple[int, int]:
-        """
-        Typical height range in pixels at 640x640 resolution.
-        
-        Used to validate size classification.
-        Example: If "deer" detected but height < 100px, might be misclassification.
-        """
-        ranges = {
-            AnimalSize.SMALL: (20, 80),
-            AnimalSize.MEDIUM: (60, 150),
-            AnimalSize.LARGE: (120, 300)
+    def inspection_level(self) -> str:
+        """Required inspection level."""
+        levels = {
+            ObjectSize.SMALL: "Visual inspection",
+            ObjectSize.MEDIUM: "Standard screening",
+            ObjectSize.LARGE: "Detailed inspection required"
         }
-        return ranges[self]
+        return levels[self]
     
     @property
-    def confusion_with_person(self) -> str:
-        """
-        Likelihood of confusion with person detection.
-        
-        LARGE animals are most likely to trigger false person detections
-        because they're similar in size to humans.
-        """
-        confusion = {
-            AnimalSize.SMALL: "Low (too small)",
-            AnimalSize.MEDIUM: "Moderate (similar size to crouching person)",
-            AnimalSize.LARGE: "High (similar size to standing person)"
+    def concealment_capacity(self) -> str:
+        """What could be concealed in this size."""
+        capacity = {
+            ObjectSize.SMALL: "Minimal (phone, wallet)",
+            ObjectSize.MEDIUM: "Moderate (laptop, documents)",
+            ObjectSize.LARGE: "High (equipment, large items)"
         }
-        return confusion[self]
+        return capacity[self]
 
 
-class ThreatLevel(Enum):
+class RiskLevel(Enum):
     """
-    Threat level for animal detection.
+    Risk level for object detection.
     
-    Different from vehicle/person threat - this is about:
-    1. Should we alert operators?
-    2. Is this animal dangerous?
-    3. Does presence indicate something unusual?
+    Based on:
+    - Object type
+    - Object size  
+    - Person association
+    - Location context
+    - Time context
     """
     
-    NONE = 0        # Common wildlife, filter out completely
-    LOW = 1         # Domestic animal, log but no alert
-    MODERATE = 2    # Unusual animal, notify operator
-    HIGH = 3        # Dangerous animal or suspicious circumstance
+    NONE = 0        # Benign object in normal context
+    LOW = 1         # Personal item with owner
+    MODERATE = 2    # Requires attention (large bag, suspicious context)
+    HIGH = 3        # Abandoned object, weapon-like, urgent
+    CRITICAL = 4    # Immediate threat (confirmed weapon, IED suspicion)
     
     @property
     def should_alert(self) -> bool:
-        """Whether this threat level should trigger operator alert."""
-        return self.value >= 2  # MODERATE or HIGH
+        """Whether this risk level requires operator alert."""
+        return self.value >= 2  # MODERATE or higher
+    
+    @property
+    def response_time(self) -> str:
+        """Expected response time for this risk level."""
+        times = {
+            RiskLevel.NONE: "No action required",
+            RiskLevel.LOW: "Log and monitor",
+            RiskLevel.MODERATE: "Alert within 2 minutes",
+            RiskLevel.HIGH: "Alert within 30 seconds",
+            RiskLevel.CRITICAL: "Immediate alert (< 10 seconds)"
+        }
+        return times[self]
     
     @property
     def alert_message(self) -> str:
-        """Alert message template for this threat level."""
+        """Alert message template."""
         messages = {
-            ThreatLevel.NONE: "Wildlife detected - no action required",
-            ThreatLevel.LOW: "Domestic animal detected - logged",
-            ThreatLevel.MODERATE: "Unusual animal activity - review recommended",
-            ThreatLevel.HIGH: "Suspicious animal presence - immediate attention"
+            RiskLevel.NONE: "Object detected - no action required",
+            RiskLevel.LOW: "Object detected - routine monitoring",
+            RiskLevel.MODERATE: "Suspicious object - review required",
+            RiskLevel.HIGH: "High-risk object - immediate attention",
+            RiskLevel.CRITICAL: "CRITICAL THREAT - immediate response"
         }
         return messages[self]
 
 
 @dataclass
-class AnimalCharacteristics:
+class ObjectCharacteristics:
     """
-    Complete animal characteristics for analysis.
-    
-    This information determines:
-    - Whether to filter out detection
-    - Whether to alert operator
-    - How to log the event
+    Complete object characteristics for security assessment.
     """
     
-    animal_type: AnimalType
-    size: AnimalSize
+    object_type: ObjectType
+    size: ObjectSize
     confidence: float
     
     # Physical characteristics
     bbox_area: int
     aspect_ratio: float
     
-    # Behavioral flags
-    is_moving: bool = True
-    is_alone: bool = True
-    near_person: bool = False  # Within 50 pixels of person detection
+    # Association
+    near_person: bool = False
+    person_distance: Optional[int] = None  # Pixels to nearest person
+    
+    # Temporal
+    stationary_time: float = 0.0  # Seconds object has been stationary
+    is_abandoned: bool = False
     
     # Context
-    time_of_day: str = "unknown"  # "day", "night", "twilight"
-    in_expected_zone: bool = True  # e.g., cattle in pasture zone
+    in_restricted_zone: bool = False
+    time_of_day: str = "unknown"
     
     @property
-    def threat_level(self) -> ThreatLevel:
+    def risk_level(self) -> RiskLevel:
         """
-        Calculate threat level based on characteristics.
+        Calculate risk level based on characteristics.
         
         Logic:
-        1. Wildlife alone = NONE (filter out)
-        2. Domestic animal in expected zone = LOW
-        3. Domestic animal in unexpected zone = MODERATE
-        4. Animal with suspicious circumstances = HIGH
+        1. Abandoned object in public area = HIGH/CRITICAL
+        2. Large container without person = MODERATE
+        3. Weapon-like object = HIGH
+        4. Personal item with owner = LOW
+        5. Small item = NONE
         """
-        # Wildlife is generally not a threat
-        if self.animal_type.is_wildlife:
-            # Exception: Bear is always at least LOW threat
-            if self.animal_type == AnimalType.BEAR:
-                return ThreatLevel.LOW
-            return ThreatLevel.NONE
+        # CRITICAL: Abandoned object for extended time
+        if self.is_abandoned and self.stationary_time > 600:  # 10 minutes
+            if self.in_restricted_zone or self.object_type.is_large_container:
+                return RiskLevel.CRITICAL
+            return RiskLevel.HIGH
         
-        # Domestic animals - context matters
-        if self.animal_type.is_domestic:
-            # Dog/cat with person = normal, LOW
-            if self.near_person:
-                return ThreatLevel.LOW
-            
-            # Animal in expected zone (e.g., livestock area) = LOW
-            if self.in_expected_zone:
-                return ThreatLevel.LOW
-            
-            # Dog alone in restricted zone at night = MODERATE
-            if self.animal_type == AnimalType.DOG:
-                if self.time_of_day == "night" and not self.in_expected_zone:
-                    return ThreatLevel.MODERATE
-            
-            # Default for domestic = LOW
-            return ThreatLevel.LOW
+        # HIGH: Abandoned large container
+        if self.is_abandoned and self.object_type.is_large_container:
+            return RiskLevel.HIGH
         
-        # Unknown/exotic animals = MODERATE (unusual)
-        return ThreatLevel.MODERATE
+        # HIGH: Weapon-like object
+        if self.object_type.can_be_weapon and not self.near_person:
+            return RiskLevel.HIGH
+        
+        # MODERATE: Large container in restricted zone
+        if self.object_type.is_large_container and self.in_restricted_zone:
+            if not self.near_person:
+                return RiskLevel.MODERATE
+        
+        # MODERATE: Any abandoned object
+        if self.is_abandoned:
+            return RiskLevel.MODERATE
+        
+        # LOW: Personal item with nearby person
+        if self.object_type.is_personal_item and self.near_person:
+            return RiskLevel.LOW
+        
+        # NONE: Small object or normal context
+        if self.size == ObjectSize.SMALL:
+            return RiskLevel.NONE
+        
+        return RiskLevel.LOW
     
     @property
-    def should_filter(self) -> bool:
-        """
-        Determine if this detection should be filtered out (no alert).
-        
-        Returns True if:
-        - Threat level is NONE
-        - High confidence wildlife detection
-        - Common expected animal
-        """
-        if self.threat_level == ThreatLevel.NONE:
+    def should_inspect(self) -> bool:
+        """Whether this object requires inspection."""
+        # Always inspect large containers
+        if self.object_type.is_large_container:
             return True
         
-        # High confidence wildlife with low threat
-        if self.animal_type.is_wildlife and self.confidence > 0.8:
-            if self.threat_level == ThreatLevel.LOW:
-                return True
+        # Inspect abandoned objects
+        if self.is_abandoned:
+            return True
+        
+        # Inspect high-risk objects
+        if self.risk_level.value >= RiskLevel.MODERATE.value:
+            return True
         
         return False
     
     @property
-    def filter_reason(self) -> str:
-        """Explanation for why this was filtered."""
-        if not self.should_filter:
-            return "Not filtered - alert required"
-        
+    def alert_reason(self) -> str:
+        """Explanation for alert/risk level."""
         reasons = []
         
-        if self.animal_type.is_wildlife:
-            reasons.append(f"{self.animal_type.display_name} is wildlife")
+        if self.is_abandoned:
+            reasons.append(f"Abandoned {self.object_type.display_name}")
+            if self.stationary_time > 0:
+                reasons.append(f"unattended for {int(self.stationary_time)}s")
         
-        if self.threat_level == ThreatLevel.NONE:
-            reasons.append("No threat to security")
+        if self.object_type.is_large_container:
+            reasons.append("Large container (inspection required)")
         
-        if self.confidence > 0.8:
-            reasons.append(f"High confidence ({self.confidence:.0%})")
+        if self.in_restricted_zone:
+            reasons.append("In restricted zone")
+        
+        if self.object_type.can_be_weapon:
+            reasons.append("Weapon-like object")
+        
+        if not self.near_person and not self.is_abandoned:
+            reasons.append("No associated person")
+        
+        if not reasons:
+            reasons.append(f"{self.object_type.display_name} detected")
         
         return " | ".join(reasons)
     
-    def get_conflict_resolution(
-        self, 
-        person_confidence: float
-    ) -> Tuple[str, float]:
+    def associate_with_person(self, person_center: Tuple[int, int], threshold: int = 100):
         """
-        Resolve conflict when both person and animal detected.
+        Associate this object with a person.
         
         Args:
-            person_confidence: Confidence from person detector
-            
-        Returns:
-            (decision, confidence) where decision is "person" or "animal"
-            
-        Logic:
-        - If animal confidence >> person confidence: Animal
-        - If person confidence >> animal confidence: Person
-        - If similar: Need additional analysis
-        
-        Threshold: 0.2 difference
+            person_center: (x, y) coordinates of person center
+            threshold: Maximum distance in pixels to consider "near"
         """
-        diff = self.confidence - person_confidence
+        # Calculate distance (simplified Euclidean)
+        obj_x = self.bbox_area  # Would use actual center in full implementation
+        obj_y = self.bbox_area
         
-        if diff > 0.2:  # Animal confidence much higher
-            return ("animal", self.confidence)
-        elif diff < -0.2:  # Person confidence much higher
-            return ("person", person_confidence)
+        dist = ((person_center[0] - obj_x) ** 2 + (person_center[1] - obj_y) ** 2) ** 0.5
+        
+        if dist <= threshold:
+            self.near_person = True
+            self.person_distance = int(dist)
+            self.is_abandoned = False
         else:
-            # Similar confidence - use size/type heuristics
-            if self.size == AnimalSize.LARGE:
-                # Large animals more likely to be confused
-                if self.animal_type in [AnimalType.DEER, AnimalType.BEAR]:
-                    return ("animal", self.confidence)
+            self.near_person = False
+            self.person_distance = int(dist)
+    
+    def update_temporal(self, time_delta: float):
+        """
+        Update temporal characteristics.
+        
+        Args:
+            time_delta: Time elapsed since last update (seconds)
+        """
+        if not self.near_person:
+            self.stationary_time += time_delta
             
-            # Default to person if ambiguous (better safe than sorry)
-            return ("person", person_confidence)
+            # Mark as abandoned after threshold
+            if self.stationary_time > 120:  # 2 minutes
+                self.is_abandoned = True
+        else:
+            self.stationary_time = 0.0
+            self.is_abandoned = False

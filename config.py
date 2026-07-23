@@ -1,72 +1,60 @@
 """
-Animal Detection Configuration
+Object Detection Configuration
 
-Configuration for the false-positive filtering system.
+Configuration for detecting and tracking objects in surveillance.
 
-Key consideration:
-We want to catch ALL animals (low threshold) to prevent false person alerts,
-but we don't want to miss actual persons (careful conflict resolution).
+Key focus:
+- Detect objects that persons carry
+- Identify abandoned objects (critical threat)
+- Track object-person associations
+- Assess risk based on context
 """
 
 from dataclasses import dataclass
-from typing import Literal, List, Optional
+from typing import Literal, Optional, List
 
 
 @dataclass
-class AnimalDetectionConfig:
+class ObjectDetectionConfig:
     """
-    Configuration for animal detection system.
-    
-    Tuned for false-positive reduction while maintaining person detection accuracy.
+    Configuration for object detection system.
     """
     
     # Model Configuration
     model_size: Literal['n', 's', 'm', 'l', 'x'] = 'm'
-    """
-    YOLOv8 model size.
-    
-    Recommendation: Same as person detection ('m') for consistency.
-    """
+    """YOLOv8 model size - consistent with other detectors."""
     
     # Detection Thresholds
-    confidence_threshold: float = 0.40
+    confidence_threshold: float = 0.50
     """
-    Minimum confidence for animal detection.
+    Minimum confidence for object detection.
     
-    Why 0.40 (lower than person's 0.45)?
-    - Want to catch all potential animals
-    - Better to have false animal detection than false person detection
-    - Low-confidence animals still useful for filtering
+    Why 0.50?
+    - Objects are usually clear (bags, backpacks)
+    - Don't want false object detections
+    - Higher than person (0.45) and animal (0.40)
     
-    Philosophy:
-    - Low confidence person (0.48) + High confidence animal (0.85) = Filter as animal
-    - We're trading precision for recall on animals
-    
-    Settings by environment:
-    - Urban (few animals): 0.45-0.50
-    - Rural/forest (many animals): 0.35-0.40
-    - Wildlife preserve: 0.30-0.35
+    Adjustments:
+    - Weapon detection: 0.40 (don't miss)
+    - General objects: 0.50 (standard)
+    - Small objects: 0.55 (reduce noise)
     """
     
-    iou_threshold: float = 0.45
-    """NMS threshold for overlapping detections."""
+    iou_threshold: float = 0.50
+    """NMS threshold."""
     
     # Processing Configuration
     input_size: tuple[int, int] = (640, 640)
-    """Input resolution - same as person/vehicle for consistency."""
+    """Standard input resolution."""
     
-    max_detections: int = 50
+    max_detections: int = 30
     """
-    Maximum animals per frame.
+    Maximum objects per frame.
     
-    Why 50?
-    - Herd animals (deer, sheep) can appear in groups
-    - Bird flocks can trigger many detections
-    - Still reasonable for processing
-    
-    Exception:
-    - Bird feeding area: 100+
-    - Livestock area: 200+
+    Why 30?
+    - Checkpoints rarely have >30 bags/objects
+    - Keeps processing manageable
+    - If exceeded, triggers crowded-area mode
     """
     
     # Device Configuration
@@ -74,206 +62,169 @@ class AnimalDetectionConfig:
     """Processing device."""
     
     half_precision: bool = True
-    """Use FP16 for speedup."""
+    """Use FP16."""
     
-    # Animal-Specific Parameters
-    min_animal_area: int = 200
+    # Object-Specific Parameters
+    min_object_area: int = 500
     """
-    Minimum bounding box area for valid animal detection.
+    Minimum bounding box area for valid object.
     
-    Why 200 (vs. 400 for person, 2000 for vehicle)?
-    - Animals can be small (cats, birds)
-    - Even small animals can trigger false alerts
-    - Want to catch them all
+    Why 500?
+    - Objects smaller than this are hard to identify
+    - Reduces noise from small artifacts
+    - Still catches bottles, books (25x20 = 500)
     
-    Examples at 640x640:
-    - 15x15 = 225 px² (small bird)
-    - 20x30 = 600 px² (cat)
-    - 40x80 = 3200 px² (deer)
-    """
-    
-    detect_birds: bool = True
-    """
-    Whether to detect birds.
-    
-    Birds are common false positive triggers:
-    - Large birds (crows, eagles) can look like movement
-    - Flocks create motion alerts
-    - Usually want to filter them out
-    
-    Disable only if:
-    - Birds are not present in area
-    - Camera angle doesn't capture ground level
+    Compare:
+    - Person: 400 px²
+    - Vehicle: 2000 px²
+    - Animal: 200 px²
+    - Object: 500 px² (middle ground)
     """
     
-    detect_small_animals: bool = True
+    detect_backpacks: bool = True
+    """Detect backpacks (critical for security)."""
+    
+    detect_handbags: bool = True
+    """Detect handbags and purses."""
+    
+    detect_suitcases: bool = True
+    """Detect suitcases (travel, cargo)."""
+    
+    detect_sports_equipment: bool = True
     """
-    Whether to detect cats and small animals.
+    Detect sports equipment.
     
-    Small animals less likely to trigger person detection,
-    but can still cause motion alerts.
-    """
-    
-    detect_livestock: bool = True
-    """
-    Whether to detect cows, sheep, horses.
-    
-    In agricultural/rural settings, livestock is expected.
-    Detection allows for:
-    - Logging livestock movement
-    - Verifying they're in correct zones
-    - Detecting unusual livestock behavior
-    """
-    
-    # Conflict Resolution
-    enable_conflict_resolution: bool = True
-    """
-    Whether to resolve person/animal conflicts.
-    
-    When both person and animal detected at similar location:
-    - Compare confidence scores
-    - Use size/shape heuristics
-    - Make determination: person or animal
-    
-    Critical feature for reducing false positives.
+    Why track sports equipment?
+    - Baseball bats can be weapons
+    - Context awareness (sports venue vs. office)
+    - Unusual equipment in wrong place = suspicious
     """
     
-    conflict_confidence_threshold: float = 0.20
+    detect_small_items: bool = False
     """
-    Confidence difference threshold for conflict resolution.
+    Detect small items (bottles, books, etc.).
     
-    If animal confidence - person confidence > 0.20:
-        → Classify as animal
-    If person confidence - animal confidence > 0.20:
-        → Classify as person
-    Else:
-        → Use heuristics or default to person (safe choice)
-    
-    Example:
-    - Person: 0.52, Animal: 0.88 → Difference: 0.36 → Animal ✓
-    - Person: 0.65, Animal: 0.50 → Difference: -0.15 → Person ✓
-    - Person: 0.60, Animal: 0.55 → Difference: -0.05 → Heuristics needed
+    Usually disabled to reduce noise.
+    Enable for:
+    - High-security checkpoints
+    - Forensic analysis
+    - Detailed activity logging
     """
     
-    proximity_threshold: int = 50
+    # Person-Object Association
+    enable_person_association: bool = True
     """
-    Distance threshold (pixels) to consider person/animal "near" each other.
+    Associate objects with nearby persons.
     
-    Used for:
-    - Dog with person detection (normal)
-    - Determining if animal is "alone"
-    - Context for threat assessment
+    Critical feature for:
+    - Abandoned object detection
+    - Owner identification
+    - Threat assessment
+    """
     
-    50 pixels at 640x640 ≈ 8% of frame width (reasonable proximity)
+    association_distance_threshold: int = 100
+    """
+    Maximum distance (pixels) to associate object with person.
+    
+    At 640x640 resolution:
+    - 100 pixels ≈ 15% of frame width
+    - Reasonable "carrying distance"
+    - Close enough to assume association
+    
+    Adjustments:
+    - Crowded areas: 60-80 (closer required)
+    - Open spaces: 120-150 (more tolerance)
+    """
+    
+    abandoned_time_threshold: float = 120.0
+    """
+    Time (seconds) before object considered abandoned.
+    
+    Why 120 seconds (2 minutes)?
+    - Person steps away briefly: < 2 min (normal)
+    - Person leaves object: > 2 min (suspicious)
+    
+    Context dependent:
+    - Airport: 60 seconds (high security)
+    - Office: 180 seconds (more tolerance)
+    - Public area: 120 seconds (balanced)
+    """
+    
+    critical_abandoned_time: float = 600.0
+    """
+    Time (seconds) before abandoned object is CRITICAL.
+    
+    10 minutes unattended = potential IED
+    Requires immediate response.
+    """
+    
+    # Risk Assessment
+    enable_risk_assessment: bool = True
+    """Calculate risk levels for detected objects."""
+    
+    restricted_zones: Optional[List[tuple]] = None
+    """
+    List of restricted zone coordinates [(x1,y1,x2,y2), ...].
+    
+    Objects in these zones get higher risk scores.
+    """
+    
+    high_security_mode: bool = False
+    """
+    High security mode:
+    - Lower confidence thresholds
+    - Shorter abandoned time threshold
+    - More aggressive risk assessment
+    
+    Use for:
+    - Critical infrastructure
+    - Government buildings
+    - High-threat environments
     """
     
     # Size Classification Thresholds
-    size_threshold_small_medium: int = 3000
+    size_threshold_small_medium: int = 5000
     """
-    Area threshold between SMALL and MEDIUM animals.
+    Area threshold between SMALL and MEDIUM objects.
     
-    At 640x640 resolution:
-    - < 3,000 px²: SMALL (birds, cats, small dogs)
-    - 3,000-15,000 px²: MEDIUM (dogs, sheep, coyotes)
-    - > 15,000 px²: LARGE (deer, bears, cattle, horses)
-    
-    Compare to person: ~8,000-25,000 px²
+    At 640x640:
+    - < 5,000: SMALL (bottles, books, small purses)
+    - 5,000-15,000: MEDIUM (handbags, small backpacks)
+    - > 15,000: LARGE (large backpacks, suitcases)
     """
     
     size_threshold_medium_large: int = 15000
-    """Area threshold between MEDIUM and LARGE animals."""
-    
-    # Behavioral Analysis
-    enable_movement_analysis: bool = True
-    """
-    Whether to analyze movement patterns.
-    
-    Movement helps distinguish:
-    - Quadrupedal (four-legged) vs. bipedal (two-legged)
-    - Flight pattern (birds) vs. walking
-    - Grazing (stationary with head down) vs. alert posture
-    
-    Requires temporal data (multiple frames) - done in tracking module.
-    This flag enables preparation for that analysis.
-    """
-    
-    # Filtering Options
-    auto_filter_wildlife: bool = True
-    """
-    Automatically filter out high-confidence wildlife detections.
-    
-    If True:
-    - Deer with 0.90 confidence → Filtered, no alert
-    - Bear with 0.85 confidence → Logged, possibly alerted (dangerous animal)
-    - Bird with 0.95 confidence → Filtered completely
-    
-    If False:
-    - All detections logged and sent to operator
-    - Useful for wildlife monitoring scenarios
-    """
-    
-    wildlife_confidence_threshold: float = 0.70
-    """
-    Minimum confidence to auto-filter wildlife.
-    
-    Only filter if:
-    - Is wildlife (deer, bird, etc.)
-    - Confidence > this threshold
-    - Threat level is NONE or LOW
-    
-    Why 0.70?
-    - Must be confident it's actually an animal
-    - Don't want to filter potential persons
-    - Lower confidence wildlife still logged, not filtered
-    """
-    
-    log_filtered_detections: bool = True
-    """
-    Whether to log detections that were filtered out.
-    
-    Logging provides:
-    - Wildlife activity patterns
-    - System performance metrics
-    - Audit trail
-    - False positive statistics
-    
-    Recommended: True (storage is cheap, data is valuable)
-    """
+    """Area threshold between MEDIUM and LARGE."""
     
     # Edge Case Handling
     low_light_boost: bool = True
-    """
-    Apply preprocessing for low-light conditions.
-    
-    Animals are often most active at dawn/dusk/night.
-    Enhancement helps detect them for filtering.
-    """
+    """Enhancement for low-light conditions."""
     
     skip_frames: int = 0
     """
-    Frame skipping for performance.
+    Frame skipping.
     
-    Animals move slower than detection rate, can often skip frames.
+    Objects move slowly (carried by persons),
+    can usually skip 1-2 frames without loss.
     
-    Settings:
-    - 0: Every frame (real-time critical)
+    - 0: Every frame (checkpoints)
     - 1-2: Performance optimization
-    - 3-5: Batch processing
     """
     
-    # Expected Animals by Zone
-    expected_animals: Optional[List[str]] = None
+    # Logging
+    log_all_objects: bool = False
     """
-    List of animal types expected in this zone.
+    Log all detected objects.
     
-    Example:
-    - Livestock area: ['cow', 'sheep', 'horse']
-    - Forest edge: ['deer', 'bear', 'bird']
-    - Urban perimeter: ['dog', 'cat']
-    
-    If None, all animals considered unexpected (default).
-    Expected animals get lower threat scores.
+    Usually False (too much data).
+    Enable for:
+    - Forensic analysis
+    - Training data collection
+    - Incident investigation
     """
+    
+    log_abandoned_objects: bool = True
+    """Always log abandoned objects (critical)."""
     
     def __post_init__(self):
         """Validate configuration."""
@@ -283,14 +234,14 @@ class AnimalDetectionConfig:
         if not 0.0 <= self.iou_threshold <= 1.0:
             raise ValueError("iou_threshold must be between 0 and 1")
         
-        if self.min_animal_area < 0:
-            raise ValueError("min_animal_area must be non-negative")
+        if self.min_object_area < 0:
+            raise ValueError("min_object_area must be non-negative")
         
-        if not 0.0 <= self.conflict_confidence_threshold <= 1.0:
-            raise ValueError("conflict_confidence_threshold must be between 0 and 1")
+        if self.abandoned_time_threshold < 0:
+            raise ValueError("abandoned_time_threshold must be non-negative")
         
-        if not 0.0 <= self.wildlife_confidence_threshold <= 1.0:
-            raise ValueError("wildlife_confidence_threshold must be between 0 and 1")
+        if self.association_distance_threshold < 0:
+            raise ValueError("association_distance_threshold must be non-negative")
         
         if self.half_precision and self.device == 'cpu':
             self.half_precision = False
@@ -302,14 +253,9 @@ class AnimalDetectionConfig:
                 "size_threshold_small_medium must be less than size_threshold_medium_large"
             )
         
-        # Parse expected animals to enum values if provided
-        if self.expected_animals:
-            from .classifier import AnimalType
-            parsed = []
-            for animal_str in self.expected_animals:
-                try:
-                    animal_type = AnimalType[animal_str.upper()]
-                    parsed.append(animal_type)
-                except KeyError:
-                    print(f"Warning: Unknown animal type '{animal_str}' in expected_animals")
-            self.expected_animals = parsed
+        # High security mode adjustments
+        if self.high_security_mode:
+            self.confidence_threshold = max(0.40, self.confidence_threshold - 0.10)
+            self.abandoned_time_threshold = min(60.0, self.abandoned_time_threshold)
+            print(f"High security mode: confidence={self.confidence_threshold}, "
+                  f"abandoned_time={self.abandoned_time_threshold}s")

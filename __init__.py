@@ -1,33 +1,34 @@
 """
-Animal Detection Module
+Object Detection Module
 
-This is the false-positive filter for Layer 0 of the SentinelAI system.
-Prevents wildlife from triggering security alerts.
+Completes Layer 0 by detecting objects carried by persons or left unattended.
 
 Real-world considerations:
-- Wildlife is the #1 cause of false positives in outdoor surveillance
-- Deer, dogs, bears, birds can trigger person detection
-- False alarms erode operator trust
-- Must distinguish between animal and human with high confidence
-- Some animals (dogs) may accompany humans - need correlation
+- Objects change threat assessment (backpack vs. briefcase)
+- Abandoned objects are critical threats (potential IED)
+- Object-person association is key intelligence
+- Size and type matter (large backpack vs. small purse)
+- Some objects are weapons (require immediate response)
 
 Why this matters:
-Without animal detection: 93% false positive rate from wildlife
-With animal detection: <10% false positive rate
+A person walking through a checkpoint is different from:
+- Person with large backpack (requires inspection)
+- Person with briefcase (normal business)
+- Person with gun-shaped object (immediate threat)
 
-The difference between a tired, frustrated operator who ignores alerts
-and an alert operator who responds immediately to real threats.
+Context transforms detection into intelligence.
 """
 
-from .detector import AnimalDetector
-from .config import AnimalDetectionConfig
-from .classifier import AnimalType, AnimalSize, ThreatLevel
+from .detector import ObjectDetector
+from .config import ObjectDetectionConfig
+from .classifier import ObjectType, ObjectSize, RiskLevel, ObjectCharacteristics
 
 __all__ = [
-    'AnimalDetector',
-    'AnimalDetectionConfig',
-    'AnimalType',
-    'AnimalSize',
-    'ThreatLevel'
+    'ObjectDetector',
+    'ObjectDetectionConfig',
+    'ObjectType',
+    'ObjectSize',
+    'RiskLevel',
+    'ObjectCharacteristics'
 ]
 __version__ = '0.1.0'
