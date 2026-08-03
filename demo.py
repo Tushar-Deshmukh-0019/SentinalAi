@@ -1,437 +1,314 @@
 """
-Animal Detection Demo
+Configuration Management System - Demo
 
-Demonstrates the false-positive filtering system.
-
-The REAL power: Combining person + vehicle + animal detection
-to create an intelligent surveillance system that doesn't cry wolf.
+Demonstrates:
+1. Loading configuration from different environments
+2. Accessing configuration values
+3. Environment variable overrides
+4. Runtime configuration changes
+5. Configuration validation
+6. Change notifications
+7. Exporting schema
 """
 
-import cv2
+import os
 import sys
 from pathlib import Path
 
-from detector import AnimalDetector
-from config import AnimalDetectionConfig
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from ai.config import ConfigManager, ConfigValidator
+from ai.logging import setup_logger
+
+# Initialize logging
+logger = setup_logger('config.demo')
 
 
-def demo_triple_detection(image_path: str):
-    """
-    Demo: Combined Person + Vehicle + Animal Detection.
-    
-    This is the COMPLETE Layer 0 system in action.
-    Shows how all three detectors work together.
-    """
+def demo_basic_loading():
+    """Demo 1: Basic configuration loading"""
     print("\n" + "="*70)
-    print("DEMO: COMPLETE LAYER 0 - PERSON + VEHICLE + ANIMAL DETECTION")
-    print("="*70)
-    print("\nThis demonstrates the full false-positive filtering system.")
-    print("The holy grail of surveillance: ONLY alert on real threats.\n")
-    
-    # Import other detectors
-    try:
-        sys.path.append(str(Path(__file__).parent.parent / 'person'))
-        sys.path.append(str(Path(__file__).parent.parent / 'vehicle'))
-        from detector import PersonDetector
-        from detector import VehicleDetector as VehicleDetectorImport
-    except ImportError:
-        print("\n⚠ Person/Vehicle detectors not available.")
-        print("Install Day 1 and Day 2 modules first.")
-        return
-    
-    # Initialize all detectors
-    print("Loading detection systems...")
-    person_detector = PersonDetector()
-    vehicle_detector = VehicleDetectorImport()
-    animal_detector = AnimalDetector()
-    print("✓ All systems loaded\n")
-    
-    print(f"Analyzing: {image_path}\n")
-    
-    # Run all detections
-    print("Running detection pipeline...")
-    persons_raw, _ = person_detector.detect(image_path)
-    vehicles, _ = vehicle_detector.detect(image_path)
-    animals, _ = animal_detector.detect(image_path)
-    
-    print(f"  Raw detections:")
-    print(f"    Persons (raw):  {len(persons_raw)}")
-    print(f"    Vehicles:       {len(vehicles)}")
-    print(f"    Animals:        {len(animals)}\n")
-    
-    # CRITICAL: Resolve person/animal conflicts
-    print("Resolving person/animal conflicts...")
-    persons_filtered, animals_used = animal_detector.resolve_conflict_with_person(
-        animals, persons_raw
-    )
-    
-    print(f"  After conflict resolution:")
-    print(f"    Persons (confirmed): {len(persons_filtered)}")
-    print(f"    Animals (filtered):  {len(animals_used)}\n")
-    
-    # Final assessment
-    print("=" * 70)
-    print("FINAL SURVEILLANCE ASSESSMENT")
-    print("=" * 70)
-    
-    total_alerts = len(persons_filtered) + len(vehicles)
-    filtered_count = len(persons_raw) - len(persons_filtered)
-    
-    print(f"\nTotal Alerts: {total_alerts}")
-    print(f"False Positives Filtered: {filtered_count}")
-    
-    if total_alerts == 0:
-        print("\n✓ NO THREATS DETECTED")
-        print("  - All activity identified as wildlife")
-        print("  - No operator alert required")
-        print("  - System maintaining watch")
-    else:
-        print(f"\n⚠ {total_alerts} CONFIRMED DETECTION(S)")
-        
-        if len(persons_filtered) > 0:
-            print(f"\n  PERSONS ({len(persons_filtered)}):")
-            for i, person in enumerate(persons_filtered, 1):
-                print(f"    #{i}: Confidence {person.confidence:.0%}, Location {person.center}")
-        
-        if len(vehicles) > 0:
-            print(f"\n  VEHICLES ({len(vehicles)}):")
-            for i, vehicle in enumerate(vehicles, 1):
-                print(f"    #{i}: {vehicle.tactical_summary}")
-    
-    if len(animals) > 0:
-        print(f"\n  WILDLIFE DETECTED ({len(animals)}):")
-        for i, animal in enumerate(animals, 1):
-            status = "FILTERED" if animal.should_filter else "LOGGED"
-            print(f"    #{i}: [{status}] {animal.summary}")
-    
-    # Tactical recommendations
-    print(f"\n{'=' * 70}")
-    print("TACTICAL RECOMMENDATIONS")
-    print("=" * 70)
-    
-    if total_alerts == 0 and len(animals) > 0:
-        print("\n✓ CONTINUE ROUTINE MONITORING")
-        print("  Reason: Only wildlife detected")
-        print("  Action: Log wildlife activity")
-        print("  Operator: No alert needed")
-    elif total_alerts > 0:
-        print("\n⚠ OPERATOR ATTENTION REQUIRED")
-        print(f"  Confirmed threats: {total_alerts}")
-        if len(persons_filtered) > 0 and len(vehicles) > 0:
-            print(f"  Profile: {len(persons_filtered)} person(s) with {len(vehicles)} vehicle(s)")
-            print("  Priority: HIGH - Person-vehicle correlation")
-        elif len(persons_filtered) > 0:
-            print(f"  Profile: {len(persons_filtered)} person(s) on foot")
-            print("  Priority: MODERATE - No vehicle detected")
-        elif len(vehicles) > 0:
-            print(f"  Profile: {len(vehicles)} vehicle(s) without visible persons")
-            print("  Priority: MODERATE - Monitor for occupants")
-    
-    # Show visualization
-    frame = cv2.imread(image_path)
-    if frame is not None:
-        # Draw all detections on one frame
-        _, person_viz = person_detector.detect(image_path, visualize=True)
-        
-        # Draw animals
-        for animal in animals:
-            x1, y1, x2, y2 = animal.bbox
-            color = (0, 255, 0) if animal.should_filter else (0, 165, 255)
-            cv2.rectangle(person_viz, (x1, y1), (x2, y2), color, 2)
-            label = f"{animal.animal_type.display_name}"
-            if animal.should_filter:
-                label += " [FILTERED]"
-            cv2.putText(
-                person_viz, label, (x1, y1 - 10),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2
-            )
-        
-        # Draw vehicles
-        for vehicle in vehicles:
-            x1, y1, x2, y2 = vehicle.bbox
-            cv2.rectangle(person_viz, (x1, y1), (x2, y2), (255, 100, 0), 2)
-            cv2.putText(
-                person_viz, f"Vehicle: {vehicle.vehicle_type.display_name}",
-                (x1, y2 + 20),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 100, 0), 2
-            )
-        
-        cv2.imshow("Complete Layer 0 Detection - Press any key", person_viz)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
-
-
-def demo_animal_only(image_path: str):
-    """Demo: Animal detection only."""
-    print("\n" + "="*60)
-    print("DEMO: Animal Detection")
-    print("="*60)
-    
-    config = AnimalDetectionConfig(
-        confidence_threshold=0.40,
-        device='cuda'
-    )
-    detector = AnimalDetector(config)
-    
-    print(f"\nAnalyzing: {image_path}\n")
-    
-    detections, visualized = detector.detect(image_path, visualize=True)
-    
-    print(f"{'─'*60}")
-    print(f"DETECTION RESULTS:")
-    print(f"{'─'*60}")
-    print(f"Total animals detected: {len(detections)}")
-    
-    if len(detections) > 0:
-        filtered = [d for d in detections if d.should_filter]
-        alerts = [d for d in detections if not d.should_filter]
-        
-        print(f"  Filtered (no alert): {len(filtered)}")
-        print(f"  Alerts (operator notified): {len(alerts)}")
-        
-        print(f"\nDetailed breakdown:")
-        for i, det in enumerate(detections, 1):
-            print(f"\n  Animal #{i}:")
-            print(f"    {det.summary}")
-            print(f"    Type: {det.animal_type.display_name}")
-            print(f"    Size: {det.animal_size.name}")
-            print(f"    Confidence: {det.confidence:.2%}")
-            print(f"    Location: {det.center}")
-            print(f"    Threat Level: {det.characteristics.threat_level.name}")
-            
-            if det.should_filter:
-                print(f"    ✓ FILTERED: {det.characteristics.filter_reason}")
-            else:
-                print(f"    ⚠ ALERT: {det.characteristics.threat_level.alert_message}")
-    else:
-        print("\n  No animals detected.")
-    
-    # Statistics
-    stats = detector.get_statistics()
-    print(f"\n{'─'*60}")
-    print(f"STATISTICS:")
-    print(f"{'─'*60}")
-    print(f"  Filter Rate: {stats['filter_rate']:.1f}%")
-    print(f"  Animal Counts: {stats['animal_counts']}")
-    
-    if visualized is not None:
-        cv2.imshow("Animal Detection - Press any key", visualized)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
-
-
-def demo_false_positive_scenario():
-    """
-    Demo: Simulated false positive scenario.
-    
-    Shows the before/after of animal detection filtering.
-    """
-    print("\n" + "="*70)
-    print("DEMO: FALSE POSITIVE FILTERING SCENARIO")
+    print("DEMO 1: Basic Configuration Loading")
     print("="*70)
     
-    print("""
-SCENARIO:
----------
-Location: Border Perimeter, Sector 3
-Time: 02:34 AM
-Weather: Clear night
-Expected Activity: None (no scheduled patrol)
-
-Motion sensor triggered on Camera #11...
-    """)
+    # Load development configuration (default)
+    config = ConfigManager.load_config()
     
-    image_path = input("Enter image path to analyze: ").strip()
-    if not image_path or not Path(image_path).exists():
-        print("\n⚠ No valid path provided.")
-        return
+    logger.info(f"Environment: {config.get_environment()}")
+    logger.info(f"Is Development: {config.is_development()}")
+    logger.info(f"Is Production: {config.is_production()}")
     
-    # Without animal detection
-    print("\n" + "─"*70)
-    print("WITHOUT ANIMAL DETECTION (Day 1-2 only):")
-    print("─"*70)
+    # Access configuration values
+    person_threshold = config.get('detection.confidence_thresholds.person')
+    db_host = config.get('database.host')
+    log_level = config.get('logging.level')
     
-    try:
-        sys.path.append(str(Path(__file__).parent.parent / 'person'))
-        from detector import PersonDetector
-        person_detector = PersonDetector()
-        
-        persons_raw, _ = person_detector.detect(image_path)
-        
-        print(f"\nPerson Detection: {len(persons_raw)} detection(s)")
-        if len(persons_raw) > 0:
-            for person in persons_raw:
-                print(f"  - Confidence: {person.confidence:.0%}")
-                if person.confidence > 0.45:
-                    print(f"    → ALERT OPERATOR ⚠")
-                    print(f"    → Operator woken up at 2:34 AM")
-        
-        print(f"\n❌ PROBLEM:")
-        print(f"  - Low confidence detection (could be animal)")
-        print(f"  - No way to verify if person or animal")
-        print(f"  - Must alert operator to be safe")
-        print(f"  - Results in false alarm fatigue")
-    except:
-        print("Person detector not available")
-    
-    # With animal detection
-    print("\n" + "─"*70)
-    print("WITH ANIMAL DETECTION (Day 1-3 complete):")
-    print("─"*70)
-    
-    animal_detector = AnimalDetector()
-    animals, _ = animal_detector.detect(image_path, time_of_day="night")
-    
-    print(f"\nAnimal Detection: {len(animals)} detection(s)")
-    if len(animals) > 0:
-        for animal in animals:
-            print(f"  - {animal.animal_type.display_name}: {animal.confidence:.0%}")
-            if animal.should_filter:
-                print(f"    → FILTERED ✓ (wildlife)")
-    
-    # Conflict resolution
-    if len(persons_raw) > 0 and len(animals) > 0:
-        persons_filtered, _ = animal_detector.resolve_conflict_with_person(
-            animals, persons_raw
-        )
-        
-        print(f"\nConflict Resolution:")
-        print(f"  Raw person detections: {len(persons_raw)}")
-        print(f"  After animal filtering: {len(persons_filtered)}")
-        print(f"  False positives prevented: {len(persons_raw) - len(persons_filtered)}")
-        
-        if len(persons_filtered) == 0:
-            print(f"\n✓ RESULT: No alert needed")
-            print(f"  - Identified as wildlife")
-            print(f"  - Operator continues sleeping")
-            print(f"  - System credibility maintained")
-            print(f"\n✓ SYSTEM WORKING AS DESIGNED")
-        else:
-            print(f"\n⚠ RESULT: Alert operator")
-            print(f"  - Confirmed human presence")
-            print(f"  - Animal explanation ruled out")
-            print(f"  - Legitimate alert")
+    print(f"\nLoaded Configuration:")
+    print(f"  Person Detection Threshold: {person_threshold}")
+    print(f"  Database Host: {db_host}")
+    print(f"  Logging Level: {log_level}")
 
 
-def demo_wildlife_statistics():
-    """
-    Demo: Wildlife activity logging and statistics.
+def demo_environment_specific():
+    """Demo 2: Environment-specific configuration"""
+    print("\n" + "="*70)
+    print("DEMO 2: Environment-Specific Configuration")
+    print("="*70)
     
-    Shows how the system builds wildlife activity intelligence.
-    """
-    print("\n" + "="*60)
-    print("DEMO: Wildlife Activity Intelligence")
-    print("="*60)
-    
-    print("""
-This demo shows how animal detection provides operational intelligence
-beyond just filtering false positives.
-
-Wildlife patterns reveal:
-- Migration routes
-- Active times
-- Seasonal changes
-- Environmental conditions
-    """)
-    
-    detector = AnimalDetector()
-    
-    # Simulated data (in production, this comes from database)
-    print("\nSample Wildlife Log (Last 24 hours):")
-    print("─" * 60)
-    
-    sample_logs = [
-        ("02:15 AM", "Deer", 3, "Sector 3 - Forest Edge"),
-        ("02:34 AM", "Deer", 1, "Sector 3 - Forest Edge"),
-        ("03:47 AM", "Bear", 1, "Sector 5 - North Perimeter"),
-        ("06:12 AM", "Bird", 12, "Multiple Sectors"),
-        ("18:45 PM", "Dog", 1, "Sector 1 - With patrol"),
-        ("21:33 PM", "Deer", 2, "Sector 3 - Forest Edge"),
-        ("23:58 PM", "Coyote", 1, "Sector 4 - Open Field"),
+    environments = ['development', 'staging', 'production']
+    settings_to_check = [
+        'detection.model_size',
+        'camera.max_cameras',
+        'processing.mode',
+        'database.host',
+        'logging.level',
+        'threat.critical_threshold'
     ]
     
-    for time, animal, count, location in sample_logs:
-        print(f"{time:>10} | {animal:>8} x{count} | {location}")
+    for env in environments:
+        print(f"\n{env.upper()} Configuration:")
+        config = ConfigManager.load_config(environment=env)
+        
+        for setting in settings_to_check:
+            value = config.get(setting)
+            print(f"  {setting}: {value}")
+
+
+def demo_environment_variables():
+    """Demo 3: Environment variable overrides"""
+    print("\n" + "="*70)
+    print("DEMO 3: Environment Variable Overrides")
+    print("="*70)
     
-    print(f"\n{'─' * 60}")
-    print("INTELLIGENCE ANALYSIS:")
-    print("─" * 60)
+    print("\nSetting environment variables...")
+    os.environ['SENTINELAI_DETECTION_CONFIDENCE_THRESHOLDS_PERSON'] = '0.75'
+    os.environ['SENTINELAI_DATABASE_HOST'] = 'prod-db.example.com'
+    os.environ['SENTINELAI_LOGGING_LEVEL'] = 'DEBUG'
+    os.environ['SENTINELAI_PROCESSING_MAX_WORKERS'] = '8'
     
-    print("""
-Key Findings:
-  1. Deer activity concentrated in Sector 3 (forest edge)
-     → Known migration path through this sector
-     → Expected pattern
-  
-  2. Peak activity 02:00-04:00 AM
-     → Nocturnal wildlife most active
-     → Adjust person detection sensitivity
-  
-  3. Bear sighting in Sector 5 (03:47 AM)
-     → Logged for safety awareness
-     → Alert patrol units
-  
-  4. Dog with patrol (18:45 PM)
-     → K-9 unit, expected
-     → Correctly not filtered
-  
-Operational Recommendations:
-  - Expect higher false trigger rate 02:00-06:00 AM (wildlife active)
-  - Sector 3 requires careful person/animal distinction
-  - Consider additional lighting in high-traffic wildlife areas
-  - Brief patrols on bear presence in Sector 5
-    """)
+    # Reload configuration with environment variables
+    ConfigManager._instance = None  # Reset singleton
+    config = ConfigManager.load_config()
+    
+    print("\nConfiguration after environment variable overrides:")
+    print(f"  Person Threshold: {config.get('detection.confidence_thresholds.person')}")
+    print(f"  Database Host: {config.get('database.host')}")
+    print(f"  Logging Level: {config.get('logging.level')}")
+    print(f"  Max Workers: {config.get('processing.max_workers')}")
+    
+    # Clean up
+    del os.environ['SENTINELAI_DETECTION_CONFIDENCE_THRESHOLDS_PERSON']
+    del os.environ['SENTINELAI_DATABASE_HOST']
+    del os.environ['SENTINELAI_LOGGING_LEVEL']
+    del os.environ['SENTINELAI_PROCESSING_MAX_WORKERS']
+
+
+def demo_runtime_changes():
+    """Demo 4: Runtime configuration changes"""
+    print("\n" + "="*70)
+    print("DEMO 4: Runtime Configuration Changes")
+    print("="*70)
+    
+    ConfigManager._instance = None  # Reset singleton
+    config = ConfigManager.load_config()
+    
+    print(f"\nOriginal threat threshold: {config.get('threat.critical_threshold')}")
+    
+    # Change configuration at runtime
+    print("Changing threat threshold to 75...")
+    config.set('threat.critical_threshold', 75)
+    
+    print(f"New threat threshold: {config.get('threat.critical_threshold')}")
+    
+    # Try to set invalid value (will raise error)
+    print("\nTrying to set invalid threat threshold (150)...")
+    try:
+        config.set('threat.critical_threshold', 150)
+        print("  ERROR: Should have raised ValidationError!")
+    except Exception as e:
+        print(f"  Correctly rejected: {e}")
+
+
+def demo_change_notifications():
+    """Demo 5: Configuration change notifications"""
+    print("\n" + "="*70)
+    print("DEMO 5: Configuration Change Notifications")
+    print("="*70)
+    
+    ConfigManager._instance = None  # Reset singleton
+    config = ConfigManager.load_config()
+    
+    # Define callback
+    def on_log_level_change(key, old_value, new_value):
+        print(f"\n  [CALLBACK] {key} changed: {old_value} → {new_value}")
+        print(f"  [ACTION] Logger level would be updated to: {new_value}")
+    
+    # Subscribe to changes
+    config.subscribe('logging.level', on_log_level_change)
+    
+    print("Subscribed to logging.level changes")
+    print("Changing logging level to DEBUG...")
+    config.set('logging.level', 'DEBUG')
+    
+    print("Changing logging level back to INFO...")
+    config.set('logging.level', 'INFO')
+
+
+def demo_validation():
+    """Demo 6: Configuration validation"""
+    print("\n" + "="*70)
+    print("DEMO 6: Configuration Validation")
+    print("="*70)
+    
+    validator = ConfigValidator()
+    
+    # Show validation rules for detection parameters
+    print("\nValidation Rules for Detection Configuration:")
+    
+    rules_to_show = [
+        'detection.confidence_thresholds.person',
+        'detection.model_size',
+        'detection.nms_threshold',
+        'camera.max_cameras',
+        'logging.level'
+    ]
+    
+    for key in rules_to_show:
+        rule = validator.get_rule(key)
+        if rule:
+            print(f"\n  {key}:")
+            print(f"    Type: {rule.get('type', 'unknown')}")
+            print(f"    Default: {rule.get('default')}")
+            print(f"    Description: {rule.get('description', 'N/A')}")
+            
+            if 'enum' in rule:
+                print(f"    Valid Values: {rule['enum']}")
+            if 'min' in rule:
+                print(f"    Range: [{rule.get('min')}, {rule.get('max')}]")
+
+
+def demo_configuration_dict():
+    """Demo 7: Get complete configuration as dictionary"""
+    print("\n" + "="*70)
+    print("DEMO 7: Configuration as Dictionary")
+    print("="*70)
+    
+    ConfigManager._instance = None  # Reset singleton
+    config = ConfigManager.load_config()
+    
+    # Get without sensitive values
+    config_dict = config.to_dict(include_sensitive=False)
+    
+    print("\nTop-level configuration sections:")
+    for key in sorted(config_dict.keys()):
+        if isinstance(config_dict[key], dict):
+            num_keys = len(config_dict[key])
+            print(f"  {key}: {num_keys} subsections")
+
+
+def demo_schema_export():
+    """Demo 8: Export configuration schema"""
+    print("\n" + "="*70)
+    print("DEMO 8: Export Configuration Schema")
+    print("="*70)
+    
+    config = ConfigManager.load_config()
+    schema_file = 'config/schema.yaml'
+    
+    print(f"\nExporting configuration schema to {schema_file}...")
+    config.export_schema(schema_file)
+    
+    # Show first few lines
+    schema_path = Path(schema_file)
+    if schema_path.exists():
+        print(f"Schema file created successfully ({schema_path.stat().st_size} bytes)")
+        print("\nFirst 20 lines of schema:")
+        with open(schema_path) as f:
+            for i, line in enumerate(f):
+                if i < 20:
+                    print(f"  {line.rstrip()}")
+                else:
+                    break
+
+
+def demo_threat_scoring():
+    """Demo 9: Threat scoring configuration"""
+    print("\n" + "="*70)
+    print("DEMO 9: Threat Scoring Configuration")
+    print("="*70)
+    
+    ConfigManager._instance = None  # Reset singleton
+    config = ConfigManager.load_config(environment='production')
+    
+    print("\nProduction Threat Configuration:")
+    print(f"  Min Score: {config.get('threat.min_score')}")
+    print(f"  Alert Threshold: {config.get('threat.alert_threshold')}")
+    print(f"  Critical Threshold: {config.get('threat.critical_threshold')}")
+    
+    print("\nThreat Scoring Weights:")
+    weights = config.get('threat.weights', {})
+    for layer, weight in sorted(weights.items()):
+        print(f"  {layer}: {weight}")
+
+
+def demo_multi_environment_comparison():
+    """Demo 10: Compare configurations across environments"""
+    print("\n" + "="*70)
+    print("DEMO 10: Multi-Environment Comparison")
+    print("="*70)
+    
+    environments = ['development', 'staging', 'production']
+    comparison_keys = [
+        'detection.model_size',
+        'camera.max_cameras',
+        'buffer.critical_preserve_rate',
+        'processing.mode',
+        'logging.level',
+        'threat.alert_threshold',
+        'monitoring.max_latency_ms'
+    ]
+    
+    print(f"\n{'Setting':<40} {'Dev':<15} {'Staging':<15} {'Prod':<15}")
+    print("-" * 85)
+    
+    for key in comparison_keys:
+        values = []
+        for env in environments:
+            ConfigManager._instance = None
+            config = ConfigManager.load_config(environment=env)
+            value = config.get(key)
+            values.append(str(value)[:12])
+        
+        print(f"{key:<40} {values[0]:<15} {values[1]:<15} {values[2]:<15}")
 
 
 def main():
-    """Main demo selector."""
+    """Run all demos"""
     print("\n" + "="*70)
-    print("SentinelAI - Animal Detection & False Positive Filtering")
+    print("🛡️  SENTINELAI - CONFIGURATION MANAGEMENT SYSTEM")
+    print("Day 10: Comprehensive Configuration Management")
     print("="*70)
-    print("\nLayer 0 is now COMPLETE: Person + Vehicle + Animal")
-    print("The system can now distinguish threats from wildlife.")
     
-    print("\nAvailable demos:")
-    print("  1. Animal detection only")
-    print("  2. Complete Layer 0 (Person + Vehicle + Animal)")
-    print("  3. False positive filtering scenario")
-    print("  4. Wildlife activity intelligence")
-    
-    choice = input("\nSelect demo (1-4) or 'q' to quit: ").strip()
-    
-    if choice == '1':
-        image_path = input("Enter image path: ").strip()
-        if not image_path:
-            print("\n⚠ No image specified.")
-            return
-        demo_animal_only(image_path)
-    
-    elif choice == '2':
-        image_path = input("Enter image path: ").strip()
-        if not image_path:
-            print("\n⚠ No image specified.")
-            return
-        demo_triple_detection(image_path)
-    
-    elif choice == '3':
-        demo_false_positive_scenario()
-    
-    elif choice == '4':
-        demo_wildlife_statistics()
-    
-    elif choice.lower() == 'q':
-        print("\nExiting demo.")
-    
-    else:
-        print("\n❌ Invalid choice.")
-
-
-if __name__ == "__main__":
     try:
-        main()
-    except KeyboardInterrupt:
-        print("\n\nDemo interrupted by user.")
+        demo_basic_loading()
+        demo_environment_specific()
+        demo_environment_variables()
+        demo_runtime_changes()
+        demo_change_notifications()
+        demo_validation()
+        demo_configuration_dict()
+        demo_schema_export()
+        demo_threat_scoring()
+        demo_multi_environment_comparison()
+        
+        print("\n" + "="*70)
+        print("✅ All demos completed successfully!")
+        print("="*70)
+        
     except Exception as e:
-        print(f"\n❌ Error: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Demo error: {e}", exc_info=True)
+        sys.exit(1)
+
+
+if __name__ == '__main__':
+    main()

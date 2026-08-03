@@ -1,54 +1,30 @@
 """
-Logging & Audit Module
+Configuration Module for SentinelAI
 
-Complete observability for surveillance system.
+Provides centralized, environment-aware configuration management with:
+- YAML/JSON configuration loading
+- Environment variable overrides
+- Validation and defaults
+- Runtime reconfiguration support
+- Multi-environment support (development, staging, production)
 
-Components:
-- Structured logging
-- Audit trail tracking
-- Error logging
-- Performance logging
-- Compliance reporting
-
-Why This Matters:
-=================
-
-Defense systems MUST answer:
-- What happened?
-- When did it happen?
-- Who was involved?
-- Why did it happen?
-- What was the response?
-
-Logging enables complete accountability.
+Usage:
+    from ai.config import ConfigManager
+    
+    # Load configuration
+    config = ConfigManager.load_config()
+    
+    # Access settings
+    db_host = config.get('database.host')
+    
+    # Override at runtime
+    config.set('database.host', 'new-host')
+    
+    # Get complete config dict
+    all_settings = config.to_dict()
 """
 
-from .logger import (
-    get_logger,
-    configure_logging,
-    LogLevel
-)
+from .manager import ConfigManager
+from .validator import ConfigValidator
 
-from .audit import (
-    AuditLogger,
-    AuditEvent,
-    AuditLevel
-)
-
-from .formatter import (
-    JSONFormatter,
-    StructuredFormatter
-)
-
-__version__ = '0.1.0'
-
-__all__ = [
-    'get_logger',
-    'configure_logging',
-    'LogLevel',
-    'AuditLogger',
-    'AuditEvent',
-    'AuditLevel',
-    'JSONFormatter',
-    'StructuredFormatter'
-]
+__all__ = ['ConfigManager', 'ConfigValidator']
