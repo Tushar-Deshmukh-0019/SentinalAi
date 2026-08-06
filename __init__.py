@@ -1,30 +1,34 @@
 """
-Configuration Module for SentinelAI
+Performance Benchmarking Suite
 
-Provides centralized, environment-aware configuration management with:
-- YAML/JSON configuration loading
-- Environment variable overrides
-- Validation and defaults
-- Runtime reconfiguration support
-- Multi-environment support (development, staging, production)
+Comprehensive performance testing and benchmarking system for SentinelAI with:
+- Individual detector benchmarks
+- Multi-camera load testing
+- Memory profiling
+- Latency analysis
+- Automated report generation
+- Performance regression detection
 
 Usage:
-    from ai.config import ConfigManager
+    from tests.performance.benchmark_runner import PerformanceBenchmark
     
-    # Load configuration
-    config = ConfigManager.load_config()
+    benchmark = PerformanceBenchmark()
+    result = benchmark.benchmark_single_detector(detector, 'Person', num_frames=100)
+    benchmark.save_results()
     
-    # Access settings
-    db_host = config.get('database.host')
-    
-    # Override at runtime
-    config.set('database.host', 'new-host')
-    
-    # Get complete config dict
-    all_settings = config.to_dict()
+    from tests.performance.benchmark_reporter import BenchmarkReporter
+    reporter = BenchmarkReporter()
+    reporter.generate_text_report()
+    reporter.generate_html_report()
 """
 
-from .manager import ConfigManager
-from .validator import ConfigValidator
+from .benchmark_runner import PerformanceBenchmark, BenchmarkResult, run_comprehensive_benchmark
+from .benchmark_reporter import BenchmarkReporter, PerformanceMetrics
 
-__all__ = ['ConfigManager', 'ConfigValidator']
+__all__ = [
+    'PerformanceBenchmark',
+    'BenchmarkResult',
+    'BenchmarkReporter',
+    'PerformanceMetrics',
+    'run_comprehensive_benchmark'
+]
