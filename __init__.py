@@ -1,34 +1,22 @@
 """
-Performance Benchmarking Suite
+Tracking Module for SentinelAI
 
-Comprehensive performance testing and benchmarking system for SentinelAI with:
-- Individual detector benchmarks
-- Multi-camera load testing
-- Memory profiling
-- Latency analysis
-- Automated report generation
-- Performance regression detection
+Multi-object tracking system with:
+- ByteTrack for efficient multi-object tracking
+- DeepSORT for person re-identification
+- Track persistence and ID management
+- Cross-camera tracking coordination
 
 Usage:
-    from tests.performance.benchmark_runner import PerformanceBenchmark
+    from ai.tracking.bytetrack import ByteTracker
     
-    benchmark = PerformanceBenchmark()
-    result = benchmark.benchmark_single_detector(detector, 'Person', num_frames=100)
-    benchmark.save_results()
+    tracker = ByteTracker(frame_rate=30)
+    detections = detector.detect(frame)
     
-    from tests.performance.benchmark_reporter import BenchmarkReporter
-    reporter = BenchmarkReporter()
-    reporter.generate_text_report()
-    reporter.generate_html_report()
+    # Track detected objects
+    tracked_objects = tracker.update(detections['boxes'], detections['confs'])
 """
 
-from .benchmark_runner import PerformanceBenchmark, BenchmarkResult, run_comprehensive_benchmark
-from .benchmark_reporter import BenchmarkReporter, PerformanceMetrics
+from .bytetrack import ByteTracker, Track, STrack
 
-__all__ = [
-    'PerformanceBenchmark',
-    'BenchmarkResult',
-    'BenchmarkReporter',
-    'PerformanceMetrics',
-    'run_comprehensive_benchmark'
-]
+__all__ = ['ByteTracker', 'Track', 'STrack']
