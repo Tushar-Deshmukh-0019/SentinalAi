@@ -59,6 +59,9 @@ class TrackOutput:
         position: Center point (x, y)
         size: Object dimensions (width, height)
         trajectory: List of recent positions for trajectory visualization
+        appearance_feature: [128] appearance vector (DeepSORT, optional)
+        appearance_gallery: List of recent appearance vectors (DeepSORT, optional)
+        appearance_confidence: Inverse of appearance distance (0-1 scale, DeepSORT)
     """
     track_id: int
     bbox_xyxy: np.ndarray
@@ -73,14 +76,19 @@ class TrackOutput:
     position: Tuple[float, float] = (0, 0)
     size: Tuple[float, float] = (0, 0)
     trajectory: List[Tuple[float, float]] = None
+    appearance_feature: Optional[np.ndarray] = None  # [128] feature vector
+    appearance_gallery: Optional[List[np.ndarray]] = None  # List of recent features
+    appearance_confidence: Optional[float] = None  # 0-1, confidence in appearance match
     
     def __post_init__(self):
         if self.trajectory is None:
             self.trajectory = []
+        if self.appearance_gallery is None:
+            self.appearance_gallery = []
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization"""
-        return {
+        result = {
             'track_id': self.track_id,
             'bbox': self.bbox_xyxy.tolist(),
             'bbox_tlwh': self.bbox_tlwh.tolist(),
@@ -94,6 +102,40 @@ class TrackOutput:
             'size': {'width': self.size[0], 'height': self.size[1]},
             'trajectory': self.trajectory
         }
+        
+        # Add appearance info if available
+        if self.appearance_feature is not None:
+            result['appearance_feature'] = self.appearance_feature.tolist() if isinstance(self.appearance_feature, np.ndarray) else self.appearance_feature
+        if self.appearance_gallery:
+            result['appearance_gallery_size'] = len(self.appearance_gallery)
+        if self.appearance_confidence is not None:
+            result['appearance_confidence'] = float(self.appearance_confidence)
+        
+        return result
+    
+    def get_appearance_distance(self, other_feature: np.ndarray) -> Optional[float]:
+        """Compute distance to another appearance feature
+        
+        Args:
+            other_feature: [128] feature vector (should be L2 normalized)
+            
+        Returns:
+            Distance value (0-2 for cosine), or None if no feature
+        """
+        if self.appearance_feature is None:
+            return None
+        
+        # Cosine distance
+        sim = np.dot(self.appearance_feature, other_feature)
+        return float(1.0 - sim)
+    
+    def get_gallery(self) -> List[np.ndarray]:
+        """Get appearance gallery (list of recent features)
+        
+        Returns:
+            List of feature vectors, empty if not available
+        """
+        return self.appearance_gallery.copy() if self.appearance_gallery else []
 
 
 class DetectionProcessor:
@@ -179,15 +221,38 @@ class TrackingPipeline:
     """
     
     def __init__(self, frame_rate: int = 30, track_buffer: int = 30,
-                 class_mapping: Optional[Dict[int, str]] = None):
+                 class_mapping: Optional[Dict[int, str]] = None,
+                 tracker_type: str = 'bytetrack'):
         """Initialize tracking pipeline
         
         Args:
             frame_rate: Video frame rate (for timeout calculations)
             track_buffer: Frames to keep lost tracks
             class_mapping: Optional dict mapping class_id to class_name
+            tracker_type: 'bytetrack' or 'deepsort'
+            
+        Raises:
+            ValueError: If tracker_type invalid
         """
-        self.tracker = ByteTracker(frame_rate=frame_rate, track_buffer=track_buffer)
+        if tracker_type == 'deepsort':
+            try:
+                from ai.tracking.deepsort import DeepSORTTracker
+                self.tracker = DeepSORTTracker(
+                    config={
+                        'frame_rate': frame_rate,
+                        'track_buffer': track_buffer,
+                    }
+                )
+                self.tracker_type = 'deepsort'
+                logger.info("TrackingPipeline initialized with DeepSORT")
+            except ImportError:
+                logger.warning("DeepSORT not available, falling back to ByteTrack")
+                self.tracker = ByteTracker(frame_rate=frame_rate, track_buffer=track_buffer)
+                self.tracker_type = 'bytetrack'
+        else:
+            self.tracker = ByteTracker(frame_rate=frame_rate, track_buffer=track_buffer)
+            self.tracker_type = 'bytetrack'
+        
         self.frame_rate = frame_rate
         self.class_mapping = class_mapping or {}
         
@@ -195,28 +260,51 @@ class TrackingPipeline:
         self.track_class_ids: Dict[int, int] = {}  # track_id -> class_id
         self.track_trajectories: Dict[int, List[Tuple[float, float]]] = {}
         
-        logger.info(f"TrackingPipeline initialized (frame_rate={frame_rate})")
+        logger.info(f"TrackingPipeline initialized (frame_rate={frame_rate}, tracker={self.tracker_type})")
     
-    def process(self, detections: Dict[str, Any], frame_id: Optional[int] = None) -> List[TrackOutput]:
+    def process(self, detections: Dict[str, Any], frame: Optional[np.ndarray] = None, 
+                frame_id: Optional[int] = None) -> List[TrackOutput]:
         """Process detections and return tracked objects
         
         Args:
             detections: Dict with 'boxes', 'confs', optional 'class_ids'
+            frame: Optional [H, W, 3] frame (required for DeepSORT)
             frame_id: Optional frame identifier (auto-incremented if not provided)
             
         Returns:
             List of TrackOutput objects for confirmed tracks
         """
-        # Convert detections to ByteTrack format
+        # Convert detections to tracker format
         detections_array, class_ids = DetectionProcessor.process_dict(detections)
         
-        # Run ByteTrack
-        tracked_stracks = self.tracker.update(detections_array)
+        # Run tracker
+        if self.tracker_type == 'deepsort':
+            # DeepSORT requires frame
+            if frame is None:
+                logger.warning("DeepSORT requires frame, falling back to spatial matching only")
+                frame = np.zeros((1, 1, 3), dtype=np.uint8)
+            
+            tracked_stracks = self.tracker.update(detections_array, frame)
+        else:
+            # ByteTrack
+            tracked_stracks = self.tracker.update(detections_array)
         
         # Enrich with metadata
         output = []
         for i, track_data in enumerate(tracked_stracks):
-            track_id = track_data['track_id']
+            # Handle both DeepSORT and ByteTrack output formats
+            if isinstance(track_data, dict):
+                # Standard format from tracker
+                track_id = track_data.get('track_id')
+                bbox_xyxy = np.array(track_data.get('bbox_xyxy', track_data.get('bbox', [0, 0, 1, 1])))
+                bbox_tlwh = np.array(track_data.get('bbox_tlwh', [0, 0, 1, 1]))
+                confidence_val = track_data.get('confidence', 1.0)
+                age_val = track_data.get('age', 0)
+                hits_val = track_data.get('hits', 1)
+                is_confirmed_val = track_data.get('is_confirmed', False)
+            else:
+                # Skip non-dict entries
+                continue
             
             # Get class info if available
             class_id = class_ids[i] if class_ids is not None and i < len(class_ids) else None
@@ -229,7 +317,6 @@ class TrackingPipeline:
                 class_id = self.track_class_ids.get(track_id)
             
             # Calculate center and size
-            bbox_xyxy = np.array(track_data['bbox'])
             x1, y1, x2, y2 = bbox_xyxy
             center_x = (x1 + x2) / 2
             center_y = (y1 + y2) / 2
@@ -245,37 +332,71 @@ class TrackingPipeline:
             if len(self.track_trajectories[track_id]) > 30:
                 self.track_trajectories[track_id].pop(0)
             
+            # Extract appearance info if available (DeepSORT)
+            appearance_feature = None
+            appearance_gallery = []
+            appearance_confidence = None
+            
+            if self.tracker_type == 'deepsort' and hasattr(self.tracker, 'appearance_manager'):
+                # Try to get appearance feature and gallery
+                track_obj = None
+                for t in self.tracker.tracked_tracks:
+                    if t.track_id == track_id:
+                        track_obj = t
+                        break
+                
+                if track_obj is not None:
+                    # Get mean feature
+                    mean_feat = self.tracker.appearance_manager.get_mean_feature(track_id)
+                    if mean_feat is not None:
+                        appearance_feature = mean_feat
+                        
+                        # Compute confidence (inverse of distance, scaled to 0-1)
+                        # Distance range [0, 2] -> confidence range [1, -1], clamp to [0, 1]
+                        appearance_confidence = max(0.0, 1.0 - (
+                            self.tracker.appearance_manager.compute_distance(mean_feat, track_id) / 2.0
+                        ))
+                    
+                    # Get gallery
+                    gallery = self.tracker.appearance_manager.get_gallery(track_id)
+                    if gallery:
+                        appearance_gallery = gallery[:10]  # Keep last 10 features
+            
             # Create output object
             track_output = TrackOutput(
                 track_id=track_id,
                 bbox_xyxy=bbox_xyxy,
-                bbox_tlwh=np.array(track_data['bbox_tlwh']),
-                confidence=track_data['confidence'],
+                bbox_tlwh=bbox_tlwh,
+                confidence=confidence_val,
                 class_id=class_id,
                 class_name=class_name,
-                age=track_data['age'],
-                hits=track_data['hits'],
-                is_confirmed=track_data['is_confirmed'],
-                is_tentative=not track_data['is_confirmed'],
+                age=age_val,
+                hits=hits_val,
+                is_confirmed=is_confirmed_val,
+                is_tentative=not is_confirmed_val,
                 position=(center_x, center_y),
                 size=(width, height),
-                trajectory=self.track_trajectories[track_id].copy()
+                trajectory=self.track_trajectories[track_id].copy(),
+                appearance_feature=appearance_feature,
+                appearance_gallery=appearance_gallery,
+                appearance_confidence=appearance_confidence,
             )
             
             output.append(track_output)
         
         return output
     
-    def process_array(self, detections: np.ndarray) -> List[TrackOutput]:
+    def process_array(self, detections: np.ndarray, frame: Optional[np.ndarray] = None) -> List[TrackOutput]:
         """Process raw detection array
         
         Args:
             detections: Nx5 array [x1, y1, x2, y2, confidence]
+            frame: Optional [H, W, 3] frame (for DeepSORT)
             
         Returns:
             List of TrackOutput objects
         """
-        return self.process({'boxes': detections[:, :4], 'confs': detections[:, 4]})
+        return self.process({'boxes': detections[:, :4], 'confs': detections[:, 4]}, frame=frame)
     
     def get_confirmed_tracks(self, tracks: List[TrackOutput]) -> List[TrackOutput]:
         """Filter to only confirmed tracks
@@ -313,18 +434,57 @@ class TrackingPipeline:
     
     def get_statistics(self) -> Dict[str, Any]:
         """Get pipeline statistics"""
-        tracker_stats = self.tracker.get_statistics()
+        if hasattr(self.tracker, 'get_statistics'):
+            tracker_stats = self.tracker.get_statistics()
+        else:
+            tracker_stats = {}
+        
         return {
             **tracker_stats,
-            'tracked_trajectories': len(self.track_trajectories)
+            'tracked_trajectories': len(self.track_trajectories),
+            'tracker_type': self.tracker_type,
         }
     
     def reset(self):
         """Reset pipeline state"""
-        self.tracker.reset()
+        if hasattr(self.tracker, 'reset'):
+            self.tracker.reset()
         self.track_class_ids.clear()
         self.track_trajectories.clear()
         logger.info("TrackingPipeline reset")
+
+
+class DeepSORTPipeline(TrackingPipeline):
+    """DeepSORT-specific pipeline (convenience wrapper)
+    
+    Same interface as TrackingPipeline but always uses DeepSORT tracker.
+    """
+    
+    def __init__(self, frame_rate: int = 30, track_buffer: int = 30,
+                 class_mapping: Optional[Dict[int, str]] = None,
+                 deepsort_config: Optional[Dict[str, Any]] = None):
+        """Initialize DeepSORT pipeline
+        
+        Args:
+            frame_rate: Video frame rate
+            track_buffer: Frames to keep lost tracks
+            class_mapping: Optional class mapping
+            deepsort_config: Optional DeepSORT configuration dict
+        """
+        from ai.tracking.deepsort import DeepSORTTracker
+        
+        config = deepsort_config or {}
+        config.setdefault('frame_rate', frame_rate)
+        config.setdefault('track_buffer', track_buffer)
+        
+        self.tracker = DeepSORTTracker(config=config)
+        self.tracker_type = 'deepsort'
+        self.frame_rate = frame_rate
+        self.class_mapping = class_mapping or {}
+        self.track_class_ids = {}
+        self.track_trajectories = {}
+        
+        logger.info(f"DeepSORTPipeline initialized (frame_rate={frame_rate})")
 
 
 # Example usage
@@ -339,7 +499,7 @@ def example_basic_pipeline():
         {'boxes': [[104, 104, 154, 184], [204, 154, 254, 254]], 'confs': [0.93, 0.90]},
     ]
     
-    print("=== Basic Pipeline Example ===")
+    print("=== Basic Pipeline Example (ByteTrack) ===")
     for frame_id, detections in enumerate(frames):
         tracks = pipeline.process(detections, frame_id=frame_id)
         confirmed = pipeline.get_confirmed_tracks(tracks)
@@ -370,6 +530,35 @@ def example_with_classes():
         print(f"Track {track.track_id}: {track.class_name}, conf={track.confidence:.2f}")
 
 
+def example_deepsort_pipeline():
+    """DeepSORT pipeline usage example"""
+    print("\n=== DeepSORT Pipeline Example ===")
+    
+    try:
+        pipeline = DeepSORTPipeline(frame_rate=30)
+        
+        # Simulate frames with detections and dummy frame
+        frame = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
+        detections = {
+            'boxes': [[100, 100, 150, 180], [200, 150, 250, 250]],
+            'confs': [0.95, 0.92]
+        }
+        
+        # Process with DeepSORT
+        tracks = pipeline.process(detections, frame=frame)
+        confirmed = pipeline.get_confirmed_tracks(tracks)
+        
+        print(f"Processed {len(tracks)} tracks, {len(confirmed)} confirmed")
+        
+        for track in tracks:
+            print(f"Track {track.track_id}: confidence={track.confidence:.2f}, "
+                  f"appearance_conf={track.appearance_confidence}")
+    
+    except ImportError:
+        print("DeepSORT not available in this environment")
+
+
 if __name__ == '__main__':
     example_basic_pipeline()
     example_with_classes()
+    example_deepsort_pipeline()
